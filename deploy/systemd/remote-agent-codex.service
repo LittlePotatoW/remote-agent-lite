@@ -1,0 +1,33 @@
+[Unit]
+Description=remote-agent-lite Codex app-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=remoteagent-codex
+Group=remoteagent
+WorkingDirectory=/srv/remote-agent-lite
+EnvironmentFile=-/etc/remote-agent-lite/remote-agent-lite.env
+Environment=HOME=/var/lib/remote-agent-lite/codex-home
+Environment=CODEX_HOME=/var/lib/remote-agent-lite/codex-home
+Environment=RUST_LOG=warn
+ExecStart=/opt/remote-agent-lite/codex/bin/codex app-server --listen ws://127.0.0.1:4517 --ws-auth capability-token --ws-token-file /etc/remote-agent-lite/codex-ws-token
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+MemoryHigh=900M
+MemoryMax=1300M
+CPUQuota=150%
+TasksMax=256
+Nice=5
+IOWeight=50
+UMask=0002
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target
+

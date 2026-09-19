@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+set -eu
+exec /opt/remote-agent-lite/app/.venv/bin/python -m remote_agent_lite.server_info "$@"
+

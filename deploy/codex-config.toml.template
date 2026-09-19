@@ -1,0 +1,15 @@
+model = "__MODEL__"
+model_provider = "dsapi"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+web_search = "live"
+
+[model_providers.dsapi]
+name = "DSAPI"
+base_url = "__BASE_URL__"
+env_key = "DSAPI_API_KEY"
+wire_api = "responses"
+
+[sandbox_workspace_write]
+network_access = true
+

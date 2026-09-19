@@ -1,0 +1,29 @@
+[Unit]
+Description=remote-agent-lite web and queue service
+After=network-online.target remote-agent-codex.service
+Wants=network-online.target remote-agent-codex.service
+
+[Service]
+Type=simple
+User=remoteagent-web
+Group=remoteagent
+WorkingDirectory=/srv/remote-agent-lite
+EnvironmentFile=/etc/remote-agent-lite/remote-agent-lite.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/remote-agent-lite/app/.venv/bin/uvicorn remote_agent_lite.main:app --host 0.0.0.0 --port 8080 --workers 1 --no-access-log
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+MemoryHigh=180M
+MemoryMax=300M
+CPUQuota=50%
+TasksMax=128
+UMask=0002
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+
