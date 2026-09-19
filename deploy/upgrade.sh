@@ -21,6 +21,7 @@ echo "==> backing up configuration and database"
 install -d -m 0700 /var/backups/remote-agent-lite
 cp -a "${ETC_DIR}/remote-agent-lite.env" "/var/backups/remote-agent-lite/env.$(date +%s)"
 DSAPI_API_KEY="$(sed -n 's/^DSAPI_API_KEY=//p' "${ETC_DIR}/remote-agent-lite.env" | head -n 1)"
+WEB_SEARCH_MODE="$(sed -n 's/^RAL_CODEX_WEB_SEARCH=//p' "${ETC_DIR}/remote-agent-lite.env" | head -n 1)"
 if [[ -f "${STATE_DIR}/remote-agent-lite.db" ]]; then
   sqlite3 "${STATE_DIR}/remote-agent-lite.db" ".backup '/var/backups/remote-agent-lite/db.$(date +%s).sqlite'"
 fi
@@ -38,6 +39,7 @@ CODEX_BIN="${CODEX_DIR}/bin/codex" \
   CODEX_RUN_USER=remoteagent-codex \
   WORKDIR=/srv/remote-agent-lite \
   DSAPI_API_KEY="${DSAPI_API_KEY}" \
+  WEB_SEARCH_MODE="${WEB_SEARCH_MODE:-live}" \
   bash "${APP_DIR}/deploy/preflight-codex.sh"
 STATUS=$?
 set -e

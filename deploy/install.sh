@@ -24,11 +24,25 @@ DATA_ROOT="/srv/remote-agent-lite"
 STATE_DIR="/var/lib/remote-agent-lite"
 ETC_DIR="/etc/remote-agent-lite"
 CODEX_VERSION="${RAL_CODEX_VERSION:-0.146.1}"
+WEB_SEARCH_MODE="${RAL_INSTALL_WEB_SEARCH:-live}"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl git nodejs npm python3 python3-pip python3-venv rsync sudo procps openssl sqlite3
+
+if ! swapon --show 2>/dev/null | grep -q .; then
+  if [[ ! -f /swapfile ]]; then
+    echo "==> creating 2G swap file"
+    fallocate -l 2G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+  fi
+  swapon /swapfile
+  if ! grep -q '^/swapfile[[:space:]]' /etc/fstab; then
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  fi
+fi
 
 groupadd -f remoteagent
 if ! id -u remoteagent-web >/dev/null 2>&1; then
@@ -124,7 +138,7 @@ model = "${DSAPI_MODEL}"
 model_provider = "dsapi"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
-web_search = "live"
+web_search = "${WEB_SEARCH_MODE}"
 
 [model_providers.dsapi]
 name = "DSAPI"
@@ -159,7 +173,7 @@ RAL_CODEX_WS_URL=ws://127.0.0.1:4517
 RAL_CODEX_TOKEN_FILE=${ETC_DIR}/codex-ws-token
 RAL_CODEX_MODEL=${DSAPI_MODEL}
 RAL_CODEX_MODEL_PROVIDER=dsapi
-RAL_CODEX_WEB_SEARCH=live
+RAL_CODEX_WEB_SEARCH=${WEB_SEARCH_MODE}
 RAL_CODEX_TURN_TIMEOUT_SECONDS=7200
 RAL_UPLOAD_CHUNK_SIZE=5242880
 RAL_MAX_FILE_SIZE=209715200
@@ -205,6 +219,7 @@ CODEX_BIN="${CODEX_DIR}/bin/codex" \
   CODEX_RUN_USER=remoteagent-codex \
   WORKDIR="${DATA_ROOT}" \
   DSAPI_API_KEY="${DSAPI_API_KEY}" \
+  WEB_SEARCH_MODE="${WEB_SEARCH_MODE}" \
   bash "${REPO_DIR}/deploy/preflight-codex.sh"
 PREFLIGHT_STATUS=$?
 set -e

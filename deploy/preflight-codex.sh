@@ -5,6 +5,7 @@ CODEX_BIN="${CODEX_BIN:-/opt/remote-agent-lite/codex/bin/codex}"
 CODEX_HOME_DIR="${CODEX_HOME_DIR:-/var/lib/remote-agent-lite/codex-home}"
 CODEX_RUN_USER="${CODEX_RUN_USER:-remoteagent-codex}"
 WORKDIR="${WORKDIR:-/srv/remote-agent-lite}"
+WEB_SEARCH_MODE="${WEB_SEARCH_MODE:-live}"
 
 if [[ ! -x "$CODEX_BIN" ]]; then
   echo "Codex binary not found: $CODEX_BIN" >&2
@@ -36,6 +37,11 @@ if ! grep -qi "OK" /tmp/remote-agent-preflight.out; then
 fi
 
 echo "==> live web-search preflight"
+if [[ "${WEB_SEARCH_MODE}" == "disabled" ]]; then
+  echo "web search disabled for this provider; skipping search preflight"
+  echo "Codex preflight passed"
+  exit 0
+fi
 if ! run_codex --search "Use web search if available. Reply with one short word." \
   >/tmp/remote-agent-search-preflight.out 2>/tmp/remote-agent-search-preflight.err; then
   echo "web search preflight failed; caller may disable web_search" >&2
