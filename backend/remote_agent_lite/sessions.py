@@ -75,6 +75,28 @@ class SessionService:
         )
         return await self.get(session_id)
 
+    async def copy_messages(self, source_id: str, target_id: str) -> int:
+        """Copy the visible transcript into another session (display only)."""
+
+        await self.get(source_id)
+        await self.get(target_id)
+        rows = await self.db.fetchall(
+            """
+            SELECT role, content, status FROM messages
+            WHERE session_id = ? ORDER BY seq ASC
+            """,
+            (source_id,),
+        )
+        copied = 0
+        for row in rows:
+            content = row["content"] or ""
+            # 半截的助手消息（还在流式或已失败且没内容）复制过去只会是个空壳。
+            if row["role"] == "assistant" and not content.strip():
+                continue
+            await self.add_message(target_id, row["role"], content, status="completed")
+            copied += 1
+        return copied
+
     async def rename(self, session_id: str, title: str) -> dict[str, Any]:
         clean_title = title.strip()[:80]
         if not clean_title:

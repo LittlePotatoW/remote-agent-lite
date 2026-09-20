@@ -101,3 +101,32 @@ async def test_codex_client_jsonrpc_flow(settings, tmp_path) -> None:
         server.close()
         await server.wait_closed()
 
+
+
+@pytest.mark.asyncio
+async def test_fork_thread_reuses_connection_and_returns_new_thread(settings, tmp_path) -> None:
+    forked: list[dict] = []
+
+    async def handler(connection) -> None:
+        await connection.send(json.dumps({"id": json.loads(await connection.recv())["id"], "result": {}}))
+        await connection.recv()  # initialized
+        request = json.loads(await connection.recv())
+        forked.append(request)
+        await connection.send(
+            json.dumps({"id": request["id"], "result": {"thread": {"id": "thread-forked"}}})
+        )
+        await asyncio.sleep(0.2)
+
+    server = await websockets.serve(handler, "127.0.0.1", 0, max_size=None)
+    port = server.sockets[0].getsockname()[1]
+    client = CodexClient(settings.with_overrides(codex_ws_url=f"ws://127.0.0.1:{port}"))
+    try:
+        new_thread_id = await client.fork_thread("thread-1", cwd=tmp_path)
+        assert new_thread_id == "thread-forked"
+        assert forked[0]["method"] == "thread/fork"
+        assert forked[0]["params"]["threadId"] == "thread-1"
+        assert forked[0]["params"]["cwd"] == str(tmp_path)
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()

@@ -475,6 +475,11 @@
           onSelect: () => (sheet = { kind: 'rename', scope: 'session', id: session.id, value: session.title })
         },
         {
+          label: '复制',
+          icon: 'copy',
+          onSelect: () => void duplicateSession(session)
+        },
+        {
           label: session.pinned ? '取消置顶' : '置顶',
           icon: 'pin',
           onSelect: () => void setPinned('session', session.id, !session.pinned)
@@ -507,6 +512,17 @@
       onSelect: () => (sheet = { kind: 'deleteEntry', entry })
     });
     menu = { anchor: anchorOf(event), items };
+  }
+
+  async function duplicateSession(session: Session) {
+    try {
+      const created = await client.duplicateSession(session.id);
+      await refreshOverview();
+      await selectSession(created.session);
+      notify('已复制对话，上下文沿用原会话');
+    } catch (error) {
+      notify(messageOf(error), true);
+    }
   }
 
   async function setPinned(scope: 'project' | 'session', id: string, pinned: boolean) {

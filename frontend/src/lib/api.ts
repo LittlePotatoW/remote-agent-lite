@@ -83,6 +83,9 @@ export const client = {
       body: JSON.stringify({})
     });
   },
+  duplicateSession(id: string) {
+    return api<{ session: Session }>(`/api/sessions/${id}/duplicate`, { method: 'POST' });
+  },
   updateSession(id: string, patch: { title?: string; pinned?: boolean }) {
     return api<{ session: Session }>(`/api/sessions/${id}`, {
       method: 'PATCH',
