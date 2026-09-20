@@ -26,6 +26,18 @@ from .storage import FileService, UploadService
 logger = logging.getLogger(__name__)
 
 
+def resolve_static_file(dist_root: Path, full_path: str) -> Path | None:
+    """把请求路径解析为 dist 内的文件；越出 dist（含同名前缀的兄弟目录）返回 None。"""
+    try:
+        # 必须按「是不是 dist 的子路径」判断：字符串前缀比较会把 dist-old、
+        # dist.bak 这类兄弟目录也算成 dist 内部，造成未登录越权读文件
+        relative = (dist_root / full_path).resolve().relative_to(dist_root)
+    except (ValueError, OSError):
+        return None
+    candidate = dist_root / relative
+    return candidate if candidate.is_file() else None
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     set_settings(app_settings)
@@ -103,16 +115,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     dist = app_settings.frontend_dist
     if dist.exists():
+        dist_root = dist.resolve()
+        index_file = dist_root / "index.html"
         app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
         @app.get("/{full_path:path}")
         async def spa(full_path: str):
             if full_path.startswith("api/"):
                 return JSONResponse(status_code=404, content={"detail": "not found"})
-            candidate = (dist / full_path).resolve()
-            if candidate.is_file() and str(candidate).startswith(str(dist.resolve())):
+            candidate = resolve_static_file(dist_root, full_path)
+            if candidate is not None:
                 return FileResponse(candidate)
-            return FileResponse(dist / "index.html")
+            return FileResponse(index_file)
 
     return app
 

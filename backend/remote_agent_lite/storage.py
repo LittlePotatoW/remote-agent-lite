@@ -162,6 +162,11 @@ class UploadService:
             "expires_at": iso(hours_from_now(self.settings.upload_ttl_hours)),
         }
 
+    async def chunk_limit(self, upload_id: str) -> int:
+        """这个上传会话允许的单片最大字节数（用于在读取请求体之前就限长）。"""
+        upload = await self._get_upload(upload_id)
+        return int(upload["chunk_size"])
+
     async def put_part(self, upload_id: str, part_index: int, data: bytes) -> dict[str, Any]:
         upload = await self._get_upload(upload_id)
         if part_index < 0 or part_index >= upload["total_parts"]:
