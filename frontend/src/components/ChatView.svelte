@@ -3,6 +3,7 @@
   import DOMPurify from 'dompurify';
   import { marked } from 'marked';
   import Icon from './Icon.svelte';
+  import { downloadUrl, localProjectPath, mapImageSrc } from '../lib/media';
   import type { Message, Project, Session } from '../lib/types';
 
   export let project: Project | null = null;
@@ -14,6 +15,7 @@
   export let onSend: (prompt: string) => Promise<void>;
   export let onStop: () => void;
   export let onNewSession: () => void;
+  export let onImage: (src: string, alt: string) => void;
 
   marked.setOptions({ breaks: true, gfm: true });
 
@@ -24,8 +26,40 @@
   let follow = true;
   let showJump = false;
 
-  const render = (content: string) =>
-    DOMPurify.sanitize(marked.parse(content || '') as string);
+  function render(content: string): string {
+    const html = DOMPurify.sanitize(marked.parse(content || '') as string);
+    if (!project) return html;
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    let changed = false;
+    for (const img of Array.from(template.content.querySelectorAll('img'))) {
+      const raw = img.getAttribute('src') || '';
+      const mapped = mapImageSrc(raw, project.id);
+      if (!mapped) {
+        const local = localProjectPath(raw);
+        if (!local) continue;
+        const link = document.createElement('a');
+        link.setAttribute('href', downloadUrl(project.id, local));
+        link.textContent = img.getAttribute('alt') || local;
+        img.replaceWith(link);
+        changed = true;
+        continue;
+      }
+      img.setAttribute('src', mapped);
+      img.setAttribute('loading', 'lazy');
+      img.setAttribute('decoding', 'async');
+      img.setAttribute('class', 'chat-image');
+      changed = true;
+    }
+    return changed ? template.innerHTML : html;
+  }
+
+  function handleBodyClick(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    if (target instanceof HTMLImageElement && target.classList.contains('chat-image')) {
+      onImage(target.currentSrc || target.src, target.alt || '');
+    }
+  }
 
   function atBottom() {
     if (!scrollBox) return true;
@@ -139,7 +173,7 @@
       {:else if message.role === 'system'}
         <div class="msg system">{message.content}</div>
       {:else}
-        <div class="msg assistant">
+        <div class="msg assistant" on:click={handleBodyClick} role="presentation">
           <div class="markdown">{@html render(message.content)}</div>
           {#if message.status === 'streaming'}<span class="streaming-caret"></span>{/if}
           {#if message.error}

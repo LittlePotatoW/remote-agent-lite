@@ -9,6 +9,7 @@
   import TreePanel from './components/TreePanel.svelte';
   import { ApiError, client, subscribeEvents, uploadFile } from './lib/api';
   import { applyTheme, readTheme } from './lib/theme';
+  import { isImagePath, rawImageUrl } from './lib/media';
   import type {
     FileEntry,
     MenuItem,
@@ -34,7 +35,7 @@
   let loginError = '';
   let loginBusy = false;
 
-  let theme: ThemeName = 'blue';
+  let theme: ThemeName = readTheme();
 
   let projects: Project[] = [];
   let activeProjectId = '';
@@ -62,6 +63,7 @@
   let menu: { anchor: { right: number; bottom: number; top: number }; items: MenuItem[] } | null =
     null;
   let toast = { text: '', error: false };
+  let lightbox: { src: string; alt: string } | null = null;
 
   let cleanupEvents: (() => void) | null = null;
   let overviewTimer: number | null = null;
@@ -96,7 +98,6 @@
   }
 
   onMount(async () => {
-    theme = readTheme();
     applyTheme(theme);
     try {
       const status = await client.authStatus();
@@ -300,6 +301,10 @@
       void loadFiles(entry.path);
       return;
     }
+    if (isImagePath(entry.name)) {
+      lightbox = { src: rawImageUrl(activeProjectId, entry.path), alt: entry.name };
+      return;
+    }
     window.location.href = client.downloadUrl(activeProjectId, entry.path);
   }
 
@@ -400,7 +405,8 @@
     const target = event.target as HTMLElement | null;
     if (target?.closest('input, textarea, [contenteditable="true"]')) return;
     if (event.key === 'Escape') {
-      if (menu) menu = null;
+      if (lightbox) lightbox = null;
+      else if (menu) menu = null;
       else if (sheet) sheet = null;
       else if (showSettings) showSettings = false;
       else if (panel) closePanel();
@@ -628,6 +634,10 @@
   let passwordNext = '';
   let passwordConfirm = '';
 
+  function focusOnMount(node: HTMLElement) {
+    node.focus();
+  }
+
   $: if (sheet?.kind === 'rename') renameValue = sheet.value;
 </script>
 
@@ -695,6 +705,7 @@
           errorText={chatError}
           onSend={sendMessage}
           onStop={stopTurn}
+          onImage={(src, alt) => (lightbox = { src, alt })}
           onNewSession={() => {
             if (activeProject) void createSessionIn(activeProject);
           }}
@@ -868,5 +879,22 @@
 
   {#if toast.text}
     <div class="toast" class:error={toast.error} role="status">{toast.text}</div>
+  {/if}
+
+  {#if lightbox}
+    <div
+      class="lightbox"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      aria-label={lightbox.alt || '图片预览'}
+      use:focusOnMount
+      on:click={() => (lightbox = null)}
+      on:keydown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Escape') lightbox = null;
+      }}
+    >
+      <img src={lightbox.src} alt={lightbox.alt} />
+    </div>
   {/if}
 {/if}

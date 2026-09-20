@@ -104,3 +104,31 @@ def test_upload_and_download(settings) -> None:
         )
         assert download.status_code == 200
         assert download.content == payload
+
+
+def test_image_raw_endpoint(settings) -> None:
+    settings.ensure_dirs()
+    app = create_app(settings)
+    with TestClient(app) as client:
+        _login(client)
+        project = client.post("/api/projects", json={"name": "Images"}).json()["project"]
+        directory = settings.projects_dir / project["slug"]
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+        (directory / "chart.png").write_bytes(png)
+        (directory / "note.svg").write_text("<svg/>", encoding="utf-8")
+        (directory / "readme.txt").write_text("hi", encoding="utf-8")
+
+        url = f"/api/projects/{project['id']}/files/raw"
+        response = client.get(url, params={"path": "chart.png"})
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"] == "image/png"
+        assert response.headers["content-disposition"] == "inline"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["content-security-policy"] == "default-src 'none'"
+        assert response.content == png
+
+        assert client.get(url, params={"path": "note.svg"}).status_code == 404
+        assert client.get(url, params={"path": "readme.txt"}).status_code == 404
+        assert client.get(url, params={"path": "missing.png"}).status_code == 404
+        assert client.get(url, params={"path": "../escape.png"}).status_code == 404
+        assert client.get(f"/api/projects/{project['id']}/files/raw").status_code == 422

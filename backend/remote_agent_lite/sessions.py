@@ -6,6 +6,9 @@ from .db import Database
 from .utils import iso, new_id
 
 
+DEFAULT_TITLE = "新对话"
+
+
 _SESSION_COLUMNS = """
     s.*,
     (SELECT COUNT(*) FROM messages m
@@ -59,7 +62,7 @@ class SessionService:
     async def create(self, project_id: str, title: str | None = None) -> dict[str, Any]:
         session_id = new_id()
         now = iso()
-        clean_title = (title or "新对话").strip()[:80] or "新对话"
+        clean_title = (title or DEFAULT_TITLE).strip()[:80] or DEFAULT_TITLE
         await self.db.execute(
             """
             INSERT INTO sessions(

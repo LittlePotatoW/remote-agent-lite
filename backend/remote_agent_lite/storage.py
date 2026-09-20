@@ -24,6 +24,16 @@ class StorageError(ValueError):
     pass
 
 
+IMAGE_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+}
+
+
 class FileService:
     HIDDEN_NAMES = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 
@@ -79,6 +89,17 @@ class FileService:
         target = resolve_within(root, relative, must_exist=True)
         if not target.is_file() or target.is_symlink():
             raise StorageError("path is not a regular file")
+        return target
+
+    async def resolve_image(self, project_id: str, relative: str) -> Path:
+        root = await self.projects.project_dir(project_id)
+        if self._has_hidden_part(relative):
+            raise StorageError("这个文件由 remote-agent-lite 管理，不能预览")
+        target = resolve_within(root, relative, must_exist=True)
+        if not target.is_file() or target.is_symlink():
+            raise StorageError("不是普通文件")
+        if target.suffix.lower() not in IMAGE_MEDIA_TYPES:
+            raise StorageError("只支持 png / jpg / gif / webp / bmp 图片")
         return target
 
     @classmethod

@@ -67,6 +67,7 @@ rsync -a --delete \
   --exclude .git \
   --exclude var \
   --exclude .venv \
+  --exclude frontend/dist \
   --exclude frontend/node_modules \
   "${REPO_DIR}/" "${APP_DIR}/"
 

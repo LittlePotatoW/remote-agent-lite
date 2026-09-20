@@ -16,7 +16,7 @@ export function readTheme(): ThemeName {
   } catch {
     /* 隐私模式下拿不到 localStorage，用默认主题 */
   }
-  return 'blue';
+  return 'mono';
 }
 
 export function applyTheme(name: ThemeName): void {

@@ -10,7 +10,7 @@ from .config import Settings
 from .db import Database
 from .events import EventBus
 from .projects import ProjectService
-from .sessions import SessionService
+from .sessions import DEFAULT_TITLE, SessionService
 from .utils import iso, new_id
 
 
@@ -70,8 +70,8 @@ class JobQueue:
             """,
             (job_id, session_id, project["id"], message["id"], prompt, now),
         )
-        if session["title"] == "新会话" and session["last_message_seq"] == 0:
-            title = " ".join(prompt.split())[:30] or "新会话"
+        if session["title"] == DEFAULT_TITLE and session["last_message_seq"] == 0:
+            title = " ".join(prompt.split())[:30] or DEFAULT_TITLE
             await self.sessions.rename(session_id, title)
         await self.events.publish(
             "turn.status",

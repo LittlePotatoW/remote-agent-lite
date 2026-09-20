@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from .deps import AppState, current_auth, optional_auth, state
 from .server_info import collect_server_info
-from .storage import StorageError
+from .storage import IMAGE_MEDIA_TYPES, StorageError
 
 
 router = APIRouter(prefix="/api")
@@ -377,6 +377,30 @@ async def download_file(
     except (FileNotFoundError, StorageError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="文件不存在") from exc
     return FileResponse(target, filename=target.name)
+
+
+@router.get("/projects/{project_id}/files/raw")
+async def raw_image(
+    project_id: str,
+    request: Request,
+    path: str = Query(min_length=1),
+    _: Any = Depends(current_auth),
+):
+    app_state: AppState = state(request)
+    try:
+        target = await app_state.files.resolve_image(project_id, path)
+    except (FileNotFoundError, StorageError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="图片不存在") from exc
+    return FileResponse(
+        target,
+        media_type=IMAGE_MEDIA_TYPES[target.suffix.lower()],
+        headers={
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'",
+            "Cache-Control": "private, max-age=60",
+        },
+    )
 
 
 @router.delete("/projects/{project_id}/files")

@@ -47,6 +47,14 @@ GLOBAL_CONTEXT_RULES = """## Resource discipline
   and what verification you ran.
 - If a root/system change is required, stop and ask the user to perform it; you are
   not allowed to use sudo or manage systemd.
+
+## Showing images
+
+- To let the user see an image, write the file inside the project directory and
+  reference it from your reply with Markdown image syntax and a project-relative
+  path, for example `![chart](output/chart.png)`.
+- Only png, jpg, jpeg, gif, webp and bmp render in the web interface. Never use svg
+  for something the user is supposed to look at.
 """
 
 
@@ -98,4 +106,3 @@ def write_project_agents(project_dir: Path, project_name: str) -> Path:
     target = project_dir / "AGENTS.md"
     target.write_text(render_project_agents(project_name), encoding="utf-8")
     return target
-
