@@ -13,11 +13,6 @@ PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 PRAGMA busy_timeout=5000;
 
-CREATE TABLE IF NOT EXISTS schema_meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -43,11 +38,10 @@ CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL CHECK(status IN ('active', 'trashed')),
+    pinned INTEGER NOT NULL DEFAULT 0,
+    pinned_at TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    trashed_at TEXT,
-    purge_at TEXT
+    updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -55,7 +49,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     thread_id TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
+    pinned INTEGER NOT NULL DEFAULT 0,
+    pinned_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_message_seq INTEGER NOT NULL DEFAULT 0,

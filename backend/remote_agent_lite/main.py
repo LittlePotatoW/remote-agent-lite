@@ -16,7 +16,6 @@ from .context import sync_codex_home
 from .db import Database
 from .deps import AppState, state
 from .events import EventBus
-from .git_ops import GitService
 from .projects import ProjectService
 from .queueing import JobQueue
 from .security import AuthService
@@ -46,14 +45,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             login_lock_seconds=app_settings.login_lock_seconds,
         )
         await auth.cleanup_expired()
-        git = GitService(app_settings)
-        projects = ProjectService(db, app_settings, git)
+        projects = ProjectService(db, app_settings)
         sessions = SessionService(db)
         files = FileService(projects, app_settings)
         uploads = UploadService(db, projects, app_settings)
         events = EventBus()
         codex = CodexClient(app_settings)
-        queue = JobQueue(db, app_settings, projects, sessions, git, codex, events)
+        queue = JobQueue(db, app_settings, projects, sessions, codex, events)
         app.state.ral = AppState(
             settings=app_settings,
             db=db,
@@ -62,7 +60,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sessions=sessions,
             files=files,
             uploads=uploads,
-            git=git,
             events=events,
             codex=codex,
             queue=queue,
@@ -123,8 +120,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 async def _maintenance_loop(app_state: AppState) -> None:
     while True:
         try:
-            await app_state.projects.purge_expired()
-            await app_state.projects.purge_for_disk_pressure()
             await app_state.uploads.cleanup_expired()
             await app_state.auth.cleanup_expired()
         except Exception:

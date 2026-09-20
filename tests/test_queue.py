@@ -7,7 +7,6 @@ import pytest
 from remote_agent_lite.codex import TurnStream
 from remote_agent_lite.db import Database
 from remote_agent_lite.events import EventBus
-from remote_agent_lite.git_ops import GitService
 from remote_agent_lite.projects import ProjectService
 from remote_agent_lite.queueing import JobQueue
 from remote_agent_lite.sessions import SessionService
@@ -45,14 +44,13 @@ async def test_queue_serializes_and_persists_turn(settings) -> None:
     settings.ensure_dirs()
     db = Database(settings.db_path)
     await db.init()
-    git = GitService(settings)
-    projects = ProjectService(db, settings, git)
+    projects = ProjectService(db, settings)
     sessions = SessionService(db)
     events = EventBus()
     project = await projects.create("Queue")
     session = await sessions.create(project["id"])
     fake = FakeCodex()
-    queue = JobQueue(db, settings, projects, sessions, git, fake, events)
+    queue = JobQueue(db, settings, projects, sessions, fake, events)
     result = await queue.enqueue(session["id"], "say hello")
     await queue._run_job(result["job_id"])
     job = await db.fetchone("SELECT * FROM jobs WHERE id = ?", (result["job_id"],))
@@ -61,4 +59,3 @@ async def test_queue_serializes_and_persists_turn(settings) -> None:
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["content"] == "hello world"
     assert fake.started == 1
-

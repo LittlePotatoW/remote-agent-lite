@@ -53,7 +53,6 @@ bash deploy/uninstall.sh
 | 路径 | 用途 |
 | --- | --- |
 | `/srv/remote-agent-lite/projects` | 项目目录 |
-| `/srv/remote-agent-lite/.trash` | 项目回收站 |
 | `/var/lib/remote-agent-lite/remote-agent-lite.db` | SQLite 数据库 |
 | `/var/lib/remote-agent-lite/uploads` | 分片上传暂存 |
 | `/var/lib/remote-agent-lite/codex-home` | Codex 会话和全局上下文 |
@@ -63,5 +62,5 @@ bash deploy/uninstall.sh
 
 - `remote-agent-codex.service`：`MemoryHigh=900M`、`MemoryMax=1300M`、`CPUQuota=150%`；
 - `remote-agent-lite.service`：`MemoryHigh=180M`、`MemoryMax=300M`、`CPUQuota=50%`；
-- 项目删除后保留 3 天；磁盘剩余低于 5 GB 时自动清理最旧回收站；低于 1 GB 时拒绝新上传和新 turn。
+- 项目删除是永久删除；磁盘剩余低于 1 GB 时拒绝新上传和新 turn。
 

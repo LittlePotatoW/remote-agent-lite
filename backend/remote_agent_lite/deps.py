@@ -9,7 +9,6 @@ from .codex import CodexClient
 from .config import Settings
 from .db import Database
 from .events import EventBus
-from .git_ops import GitService
 from .projects import ProjectService
 from .queueing import JobQueue
 from .security import AuthService
@@ -26,7 +25,6 @@ class AppState:
     sessions: SessionService
     files: FileService
     uploads: UploadService
-    git: GitService
     events: EventBus
     codex: CodexClient
     queue: JobQueue
@@ -49,4 +47,3 @@ async def optional_auth(request: Request):
     app_state: AppState = state(request)
     token = request.cookies.get(app_state.settings.cookie_name)
     return await app_state.auth.validate(token)
-

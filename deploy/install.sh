@@ -29,7 +29,7 @@ WEB_SEARCH_MODE="${RAL_INSTALL_WEB_SEARCH:-live}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-  ca-certificates curl git nodejs npm python3 python3-pip python3-venv rsync sudo procps openssl sqlite3
+  ca-certificates curl nodejs npm python3 python3-pip python3-venv rsync sudo procps openssl sqlite3
 
 if ! swapon --show 2>/dev/null | grep -q .; then
   if [[ ! -f /swapfile ]]; then
@@ -57,7 +57,7 @@ usermod -aG remoteagent remoteagent-web
 usermod -aG remoteagent remoteagent-codex
 
 install -d -m 0755 /opt/remote-agent-lite "$APP_DIR" "$CODEX_DIR"
-install -d -m 2775 -o remoteagent-web -g remoteagent "$DATA_ROOT" "$DATA_ROOT/projects" "$DATA_ROOT/.trash"
+install -d -m 2775 -o remoteagent-web -g remoteagent "$DATA_ROOT" "$DATA_ROOT/projects"
 install -d -m 2775 -o remoteagent-web -g remoteagent "$STATE_DIR" "$STATE_DIR/uploads"
 install -d -m 0750 -o remoteagent-codex -g remoteagent "$STATE_DIR/codex-home"
 install -d -m 0750 -o root -g remoteagent "$ETC_DIR"
@@ -157,7 +157,6 @@ install -m 0600 -o remoteagent-codex -g remoteagent \
 cat > "${ETC_DIR}/remote-agent-lite.env" <<EOF
 RAL_DATA_DIR=${STATE_DIR}
 RAL_PROJECTS_DIR=${DATA_ROOT}/projects
-RAL_TRASH_DIR=${DATA_ROOT}/.trash
 RAL_UPLOADS_DIR=${STATE_DIR}/uploads
 RAL_DB_PATH=${STATE_DIR}/remote-agent-lite.db
 RAL_CODEX_HOME=${STATE_DIR}/codex-home
@@ -179,10 +178,8 @@ RAL_UPLOAD_CHUNK_SIZE=5242880
 RAL_MAX_FILE_SIZE=209715200
 RAL_PROJECT_QUOTA=10737418240
 RAL_UPLOAD_TTL_HOURS=24
-RAL_TRASH_RETENTION_DAYS=3
 RAL_DISK_LOW_WATERMARK=5368709120
 RAL_DISK_CRITICAL=1073741824
-RAL_SNAPSHOT_MAX_FILE_SIZE=20971520
 RAL_SSE_COALESCE_MS=100
 DSAPI_API_KEY=${DSAPI_API_KEY}
 EOF
@@ -203,7 +200,6 @@ sudo -u remoteagent-codex env \
 printf '%s' "${ADMIN_PASSWORD}" | sudo -u remoteagent-web env \
   RAL_DATA_DIR="${STATE_DIR}" \
   RAL_PROJECTS_DIR="${DATA_ROOT}/projects" \
-  RAL_TRASH_DIR="${DATA_ROOT}/.trash" \
   RAL_UPLOADS_DIR="${STATE_DIR}/uploads" \
   RAL_DB_PATH="${STATE_DIR}/remote-agent-lite.db" \
   "${APP_DIR}/.venv/bin/remote-agent-lite" set-password --password-stdin >/dev/null

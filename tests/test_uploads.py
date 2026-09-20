@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from remote_agent_lite.db import Database
-from remote_agent_lite.git_ops import GitService
 from remote_agent_lite.projects import ProjectService
 from remote_agent_lite.storage import UploadService
 
@@ -13,7 +12,7 @@ async def test_chunked_upload_and_resume(settings) -> None:
     settings.ensure_dirs()
     db = Database(settings.db_path)
     await db.init()
-    projects = ProjectService(db, settings, GitService(settings))
+    projects = ProjectService(db, settings)
     project = await projects.create("Uploads")
     uploads = UploadService(db, projects, settings)
     payload = b"hello world!"
@@ -30,4 +29,3 @@ async def test_chunked_upload_and_resume(settings) -> None:
     assert result["path"] == "uploads/hello.txt"
     project_dir = await projects.project_dir(project["id"])
     assert (project_dir / "uploads" / "hello.txt").read_bytes() == payload
-

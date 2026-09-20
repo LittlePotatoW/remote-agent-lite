@@ -109,7 +109,6 @@ grep -qx 'SMOKE_OK' "${OUTPUT_FILE}"
 
 echo "==> cleanup"
 curl -fsS -b "${COOKIE}" -X DELETE "${BASE}/api/projects/${PROJECT_ID}" >/dev/null
-curl -fsS -b "${COOKIE}" -X DELETE "${BASE}/api/trash" >/dev/null
 
 echo "==> service status"
 systemctl is-active remote-agent-codex.service
@@ -117,4 +116,3 @@ systemctl is-active remote-agent-lite.service
 remote-agent-info --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print("memory_available_mb="+str(d["memory"]["available_mb"])); print("disk_free_mb="+str(d["disk"]["free_mb"]))'
 
 echo "SMOKE_TEST_PASSED"
-

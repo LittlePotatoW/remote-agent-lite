@@ -9,10 +9,9 @@ from .codex import CodexClient, CodexError, TurnStream
 from .config import Settings
 from .db import Database
 from .events import EventBus
-from .git_ops import GitService
 from .projects import ProjectService
 from .sessions import SessionService
-from .utils import iso, new_id, utcnow
+from .utils import iso, new_id
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,6 @@ class JobQueue:
         settings: Settings,
         projects: ProjectService,
         sessions: SessionService,
-        git: GitService,
         codex: CodexClient,
         events: EventBus,
     ):
@@ -33,7 +31,6 @@ class JobQueue:
         self.settings = settings
         self.projects = projects
         self.sessions = sessions
-        self.git = git
         self.codex = codex
         self.events = events
         self._queue: asyncio.Queue[str] = asyncio.Queue()
@@ -372,15 +369,6 @@ class JobQueue:
     ) -> None:
         message = await self.db.fetchone("SELECT * FROM messages WHERE id = ?", (message_id,))
         session = await self.sessions.get(job["session_id"])
-        project_dir = await self.projects.project_dir(project["id"])
-        snapshot = None
-        try:
-            snapshot = await self.git.snapshot(
-                project_dir,
-                f"snapshot: {session['title']} ({utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC)",
-            )
-        except Exception:
-            logger.exception("git snapshot failed for project %s", project["id"])
         await self._mark_job(job["id"], "succeeded", None)
         await self.events.publish(
             "message.completed",
@@ -388,7 +376,6 @@ class JobQueue:
                 "message_id": message_id,
                 "content": final_text,
                 "status": "succeeded",
-                "snapshot": snapshot,
             },
             session_id=session["id"],
             project_id=project["id"],

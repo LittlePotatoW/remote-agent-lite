@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -26,16 +25,22 @@ class PasswordBody(BaseModel):
     new_password: str
 
 
-class ProjectBody(BaseModel):
+class ProjectCreateBody(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
 
-class SessionBody(BaseModel):
+class ProjectPatchBody(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    pinned: bool | None = None
+
+
+class SessionCreateBody(BaseModel):
     title: str | None = Field(default=None, max_length=80)
 
 
-class SessionRenameBody(BaseModel):
-    title: str = Field(min_length=1, max_length=80)
+class SessionPatchBody(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    pinned: bool | None = None
 
 
 class TurnBody(BaseModel):
@@ -52,10 +57,6 @@ class UploadCompleteBody(BaseModel):
     sha256: str | None = None
 
 
-class GitRestoreBody(BaseModel):
-    commit: str = Field(min_length=4, max_length=64)
-
-
 def _client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
@@ -66,6 +67,16 @@ def _client_ip(request: Request) -> str:
         return str(ipaddress.ip_address(candidate))
     except ValueError:
         return candidate
+
+
+async def _wait_until_idle(app_state: AppState, where: str, value: str) -> None:
+    for _ in range(100):
+        running = await app_state.db.fetchone(
+            f"SELECT 1 FROM jobs WHERE {where} = ? AND status = 'running' LIMIT 1", (value,)
+        )
+        if not running:
+            return
+        await asyncio.sleep(0.1)
 
 
 @router.get("/auth/status")
@@ -82,14 +93,14 @@ async def auth_status(request: Request):
 async def auth_setup(body: LoginBody, request: Request, response: Response):
     app_state: AppState = state(request)
     if await app_state.auth.has_password():
-        raise HTTPException(status_code=409, detail="password is already configured")
+        raise HTTPException(status_code=409, detail="管理员密码已经设置过了")
     try:
         await app_state.auth.set_password(body.password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     token = await app_state.auth.login(body.password, _client_ip(request))
     if not token:
-        raise HTTPException(status_code=500, detail="could not create login session")
+        raise HTTPException(status_code=500, detail="无法创建登录会话")
     _set_cookie(response, app_state, token)
     return {"ok": True}
 
@@ -102,7 +113,7 @@ async def auth_login(body: LoginBody, request: Request, response: Response):
     except PermissionError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     if not token:
-        raise HTTPException(status_code=401, detail="wrong password")
+        raise HTTPException(status_code=401, detail="密码不正确")
     _set_cookie(response, app_state, token)
     return {"ok": True}
 
@@ -127,7 +138,7 @@ async def auth_change_password(
 ):
     app_state: AppState = state(request)
     if not await app_state.auth.verify_password(body.current_password):
-        raise HTTPException(status_code=401, detail="current password is incorrect")
+        raise HTTPException(status_code=401, detail="当前密码不正确")
     try:
         await app_state.auth.set_password(body.new_password)
     except ValueError as exc:
@@ -135,28 +146,45 @@ async def auth_change_password(
     return {"ok": True}
 
 
-@router.get("/projects")
-async def list_projects(request: Request, _: Any = Depends(current_auth)):
-    return {"projects": await state(request).projects.list_active()}
+@router.get("/overview")
+async def overview(request: Request, _: Any = Depends(current_auth)):
+    app_state: AppState = state(request)
+    projects = await app_state.projects.list_active()
+    sessions = await app_state.sessions.list_all()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for session in sessions:
+        grouped.setdefault(session["project_id"], []).append(session)
+    for project in projects:
+        project["sessions"] = grouped.get(project["id"], [])
+    return {"projects": projects}
 
 
 @router.post("/projects")
 async def create_project(
-    body: ProjectBody, request: Request, _: Any = Depends(current_auth)
+    body: ProjectCreateBody, request: Request, _: Any = Depends(current_auth)
 ):
     try:
         project = await state(request).projects.create(body.name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    project["sessions"] = []
     return {"project": project}
 
 
 @router.patch("/projects/{project_id}")
-async def rename_project(
-    project_id: str, body: ProjectBody, request: Request, _: Any = Depends(current_auth)
+async def update_project(
+    project_id: str,
+    body: ProjectPatchBody,
+    request: Request,
+    _: Any = Depends(current_auth),
 ):
+    app_state: AppState = state(request)
     try:
-        project = await state(request).projects.rename(project_id, body.name)
+        project = await app_state.projects.get(project_id)
+        if body.name is not None:
+            project = await app_state.projects.rename(project_id, body.name)
+        if body.pinned is not None:
+            project = await app_state.projects.set_pinned(project_id, body.pinned)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -165,58 +193,22 @@ async def rename_project(
 
 
 @router.delete("/projects/{project_id}")
-async def trash_project(
+async def delete_project(
     project_id: str, request: Request, _: Any = Depends(current_auth)
 ):
     app_state: AppState = state(request)
     try:
         await app_state.projects.get(project_id)
-        sessions = await app_state.sessions.list_for_project(project_id)
-        for session in sessions:
-            try:
-                await app_state.queue.cancel(session["id"])
-            except Exception:
-                pass
-        project = await app_state.projects.trash(project_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"project": project}
-
-
-@router.post("/projects/{project_id}/restore")
-async def restore_project(
-    project_id: str, request: Request, _: Any = Depends(current_auth)
-):
-    try:
-        project = await state(request).projects.restore(project_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"project": project}
-
-
-@router.get("/trash")
-async def list_trash(request: Request, _: Any = Depends(current_auth)):
-    return {"projects": await state(request).projects.list_trash()}
-
-
-@router.delete("/trash")
-async def empty_trash(request: Request, _: Any = Depends(current_auth)):
-    count = await state(request).projects.empty_trash()
-    return {"removed": count}
-
-
-@router.delete("/trash/{project_id}")
-async def purge_trash_project(
-    project_id: str, request: Request, _: Any = Depends(current_auth)
-):
-    try:
-        await state(request).projects.purge(project_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    sessions = await app_state.sessions.list_for_project(project_id)
+    for session in sessions:
+        try:
+            await app_state.queue.cancel(session["id"])
+        except Exception:
+            pass
+    await _wait_until_idle(app_state, "project_id", project_id)
+    await app_state.projects.delete(project_id)
     return {"ok": True}
 
 
@@ -224,17 +216,18 @@ async def purge_trash_project(
 async def list_sessions(
     project_id: str, request: Request, _: Any = Depends(current_auth)
 ):
+    app_state: AppState = state(request)
     try:
-        await state(request).projects.get(project_id)
+        await app_state.projects.get(project_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"sessions": await state(request).sessions.list_for_project(project_id)}
+    return {"sessions": await app_state.sessions.list_for_project(project_id)}
 
 
 @router.post("/projects/{project_id}/sessions")
 async def create_session(
     project_id: str,
-    body: SessionBody,
+    body: SessionCreateBody,
     request: Request,
     _: Any = Depends(current_auth),
 ):
@@ -248,11 +241,19 @@ async def create_session(
 
 
 @router.patch("/sessions/{session_id}")
-async def rename_session(
-    session_id: str, body: SessionRenameBody, request: Request, _: Any = Depends(current_auth)
+async def update_session(
+    session_id: str,
+    body: SessionPatchBody,
+    request: Request,
+    _: Any = Depends(current_auth),
 ):
+    app_state: AppState = state(request)
     try:
-        session = await state(request).sessions.rename(session_id, body.title)
+        session = await app_state.sessions.get(session_id)
+        if body.title is not None:
+            session = await app_state.sessions.rename(session_id, body.title)
+        if body.pinned is not None:
+            session = await app_state.sessions.set_pinned(session_id, body.pinned)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -273,22 +274,10 @@ async def delete_session(
         await app_state.queue.cancel(session_id)
     except Exception:
         pass
-    for _ in range(50):
-        running = await app_state.db.fetchone(
-            """
-            SELECT 1 FROM jobs WHERE session_id = ? AND status = 'running'
-            LIMIT 1
-            """,
-            (session_id,),
-        )
-        if not running:
-            break
-        await asyncio.sleep(0.1)
+    await _wait_until_idle(app_state, "session_id", session_id)
     if session.get("thread_id"):
         try:
-            await app_state.codex._request(
-                "thread/delete", {"threadId": session["thread_id"]}, timeout=20
-            )
+            await app_state.codex.delete_thread(session["thread_id"])
         except Exception:
             pass
     await app_state.sessions.delete(session_id)
@@ -370,7 +359,7 @@ async def list_files(
     try:
         return await state(request).files.list_entries(project_id, path)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="path not found") from exc
+        raise HTTPException(status_code=404, detail="路径不存在") from exc
     except (StorageError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -386,7 +375,7 @@ async def download_file(
     try:
         target = await app_state.files.resolve_download(project_id, path)
     except (FileNotFoundError, StorageError, ValueError) as exc:
-        raise HTTPException(status_code=404, detail="file not found") from exc
+        raise HTTPException(status_code=404, detail="文件不存在") from exc
     return FileResponse(target, filename=target.name)
 
 
@@ -399,15 +388,15 @@ async def delete_file(
 ):
     app_state: AppState = state(request)
     try:
-        await app_state.files.delete_file(project_id, path)
+        kind = await app_state.files.delete_entry(project_id, path)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="file not found") from exc
+        raise HTTPException(status_code=404, detail="条目不存在") from exc
     except (StorageError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await app_state.events.publish(
-        "files.changed", {"reason": "file_deleted"}, project_id=project_id
+        "files.changed", {"reason": "deleted", "kind": kind}, project_id=project_id
     )
-    return {"ok": True}
+    return {"ok": True, "kind": kind}
 
 
 @router.post("/projects/{project_id}/uploads/init")
@@ -454,7 +443,7 @@ async def upload_status(
         "SELECT * FROM upload_sessions WHERE id = ?", (upload_id,)
     )
     if not row:
-        raise HTTPException(status_code=404, detail="upload session not found")
+        raise HTTPException(status_code=404, detail="上传会话不存在")
     return dict(row)
 
 
@@ -473,65 +462,13 @@ async def upload_complete(
         result = await app_state.uploads.complete(upload_id, body.sha256)
     except (StorageError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    project_id = upload["project_id"] if upload else None
-    if project_id:
+    if upload:
         await app_state.events.publish(
-            "files.changed", {"reason": "upload_completed"}, project_id=project_id
+            "files.changed",
+            {"reason": "upload_completed"},
+            project_id=upload["project_id"],
         )
     return result
-
-
-@router.get("/projects/{project_id}/git/log")
-async def git_log(
-    project_id: str,
-    request: Request,
-    limit: int = Query(default=50, ge=1, le=200),
-    _: Any = Depends(current_auth),
-):
-    app_state: AppState = state(request)
-    try:
-        await app_state.projects.get(project_id)
-        project_dir = await app_state.projects.project_dir(project_id)
-        return {"commits": await app_state.git.log(project_dir, limit)}
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.get("/projects/{project_id}/git/commit/{commit}")
-async def git_commit(
-    project_id: str, commit: str, request: Request, _: Any = Depends(current_auth)
-):
-    app_state: AppState = state(request)
-    try:
-        await app_state.projects.get(project_id)
-        project_dir = await app_state.projects.project_dir(project_id)
-        return await app_state.git.show(project_dir, commit)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/projects/{project_id}/git/restore")
-async def git_restore(
-    project_id: str,
-    body: GitRestoreBody,
-    request: Request,
-    _: Any = Depends(current_auth),
-):
-    app_state: AppState = state(request)
-    try:
-        await app_state.projects.get(project_id)
-        project_dir = await app_state.projects.project_dir(project_id)
-        commit = await app_state.git.restore(project_dir, body.commit)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await app_state.events.publish(
-        "files.changed", {"reason": "git_restore"}, project_id=project_id
-    )
-    return {"commit": commit}
 
 
 @router.get("/server-info")
@@ -565,8 +502,7 @@ async def events(
                     yield ": heartbeat\n\n"
                     continue
                 if event.session_id and session_id and event.session_id != session_id:
-                    if event.event_type not in {"turn.status", "session.status"}:
-                        continue
+                    continue
                 yield event.to_sse()
         finally:
             await app_state.events.unsubscribe(queue)

@@ -28,7 +28,6 @@ def _env_path(name: str, default: Path) -> Path:
 class Settings:
     data_dir: Path
     projects_dir: Path
-    trash_dir: Path
     uploads_dir: Path
     db_path: Path
     codex_home: Path
@@ -55,10 +54,8 @@ class Settings:
     project_quota: int
     upload_ttl_hours: int
 
-    trash_retention_days: int
     disk_low_watermark: int
     disk_critical: int
-    snapshot_max_file_size: int
     sse_coalesce_ms: int
     testing: bool
 
@@ -69,7 +66,6 @@ class Settings:
         return cls(
             data_dir=data_dir,
             projects_dir=_env_path("RAL_PROJECTS_DIR", data_dir / "projects"),
-            trash_dir=_env_path("RAL_TRASH_DIR", data_dir / "trash"),
             uploads_dir=_env_path("RAL_UPLOADS_DIR", data_dir / "uploads"),
             db_path=_env_path("RAL_DB_PATH", data_dir / "remote-agent-lite.db"),
             codex_home=_env_path("RAL_CODEX_HOME", data_dir / "codex-home"),
@@ -92,12 +88,8 @@ class Settings:
             max_file_size=_env_int("RAL_MAX_FILE_SIZE", 200 * 1024 * 1024),
             project_quota=_env_int("RAL_PROJECT_QUOTA", 10 * 1024 * 1024 * 1024),
             upload_ttl_hours=_env_int("RAL_UPLOAD_TTL_HOURS", 24),
-            trash_retention_days=_env_int("RAL_TRASH_RETENTION_DAYS", 3),
             disk_low_watermark=_env_int("RAL_DISK_LOW_WATERMARK", 5 * 1024 * 1024 * 1024),
             disk_critical=_env_int("RAL_DISK_CRITICAL", 1 * 1024 * 1024 * 1024),
-            snapshot_max_file_size=_env_int(
-                "RAL_SNAPSHOT_MAX_FILE_SIZE", 20 * 1024 * 1024
-            ),
             sse_coalesce_ms=_env_int("RAL_SSE_COALESCE_MS", 100),
             testing=_env_bool("RAL_TESTING", False),
         )
@@ -109,7 +101,6 @@ class Settings:
         for directory in (
             self.data_dir,
             self.projects_dir,
-            self.trash_dir,
             self.uploads_dir,
             self.codex_home,
         ):
@@ -134,4 +125,3 @@ def get_settings() -> Settings:
 def set_settings(settings: Settings) -> None:
     global _settings
     _settings = settings
-

@@ -57,14 +57,20 @@ class FileService:
         entries.sort(key=lambda entry: (entry["type"] != "directory", entry["name"].lower()))
         return {"path": relative, "entries": entries}
 
-    async def delete_file(self, project_id: str, relative: str) -> None:
+    async def delete_entry(self, project_id: str, relative: str) -> str:
         root = await self.projects.project_dir(project_id)
-        target = resolve_within(root, relative, must_exist=True)
-        if target.is_dir():
-            raise StorageError("directories cannot be deleted from the file view")
         if self._has_hidden_part(relative):
-            raise StorageError("this file is managed by remote-agent-lite")
+            raise StorageError("这个条目由 remote-agent-lite 管理，不能删除")
+        target = resolve_within(root, relative)
+        if target == root.resolve():
+            raise StorageError("不能删除项目根目录")
+        if not target.exists():
+            raise FileNotFoundError(relative)
+        if target.is_dir():
+            shutil.rmtree(target)
+            return "directory"
         target.unlink()
+        return "file"
 
     async def resolve_download(self, project_id: str, relative: str) -> Path:
         root = await self.projects.project_dir(project_id)

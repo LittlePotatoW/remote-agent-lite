@@ -226,6 +226,9 @@ class CodexClient:
         )
         return response or {}
 
+    async def delete_thread(self, thread_id: str) -> None:
+        await self._request("thread/delete", {"threadId": thread_id}, timeout=20)
+
     async def recover_turn(self, thread_id: str, cwd: Path) -> TurnStream | None:
         try:
             response = await self.thread_read(thread_id, include_turns=True)

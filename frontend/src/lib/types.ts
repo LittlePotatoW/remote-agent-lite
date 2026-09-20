@@ -1,15 +1,12 @@
-export interface Project {
-  id: string;
-  name: string;
-  slug: string;
-  status: 'active' | 'trashed';
-  created_at: string;
-  updated_at: string;
-  trashed_at?: string | null;
-  purge_at?: string | null;
-  session_count?: number;
-  size_bytes?: number;
-  size_mb?: number;
+export type ThemeName = 'blue' | 'mono' | 'orange';
+
+export type JobStatus = 'running' | 'queued' | null;
+
+export interface MenuItem {
+  label: string;
+  icon?: string;
+  danger?: boolean;
+  onSelect: () => void;
 }
 
 export interface Session {
@@ -17,14 +14,28 @@ export interface Session {
   project_id: string;
   title: string;
   thread_id?: string | null;
-  status: string;
+  pinned: boolean;
   created_at: string;
   updated_at: string;
   last_message_seq: number;
   last_read_seq: number;
-  unread_count?: number;
+  unread_count: number;
   last_message?: string | null;
   last_message_status?: string | null;
+  job_status?: JobStatus;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  slug: string;
+  pinned: boolean;
+  created_at: string;
+  updated_at: string;
+  session_count: number;
+  size_bytes: number;
+  size_mb: number;
+  sessions: Session[];
 }
 
 export interface Message {
@@ -38,7 +49,6 @@ export interface Message {
   created_at: string;
   completed_at?: string | null;
   error?: string | null;
-  streaming?: boolean;
 }
 
 export interface FileEntry {
@@ -47,12 +57,6 @@ export interface FileEntry {
   type: 'file' | 'directory';
   size: number;
   mtime: string;
-}
-
-export interface GitCommit {
-  hash: string;
-  timestamp: number;
-  subject: string;
 }
 
 export interface ServerInfo {
@@ -66,7 +70,6 @@ export interface ServerInfo {
     cgroup_max_mb?: number | null;
   };
   disk: { free_mb: number; total_mb: number };
-  processes: Array<{ pid: number; rss_mb: number; command: string; same_user?: boolean }>;
   budgets: {
     recommended_parallelism: number;
     available_memory_mb: number;
@@ -75,4 +78,3 @@ export interface ServerInfo {
     warnings: string[];
   };
 }
-
