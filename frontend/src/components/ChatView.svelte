@@ -123,10 +123,14 @@
   }
 
   function keydown(event: KeyboardEvent) {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      void send();
-    }
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+    if (isTouchOnly()) return;
+    event.preventDefault();
+    void send();
+  }
+
+  function isTouchOnly(): boolean {
+    return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   }
 
   $: statusText = running ? '运行中' : queued > 0 ? `排队中 ${queued}` : '';
@@ -201,6 +205,7 @@
       aria-label="消息内容"
       bind:value={prompt}
       disabled={!session}
+      enterkeyhint="enter"
       on:input={grow}
       on:keydown={keydown}
     ></textarea>

@@ -166,6 +166,10 @@
   }
 
   async function selectSession(session: Session) {
+    if (session.project_id && session.project_id !== activeProjectId) {
+      activeProjectId = session.project_id;
+      localStorage.setItem('ral-project', session.project_id);
+    }
     activeSessionId = session.id;
     chatError = '';
     closePanel();

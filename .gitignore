@@ -9,3 +9,7 @@ var/
 .env
 *.log
 
+# 只在本机生效、故意不入库的东西：
+# .githooks/ 是按需安装的本地钩子（core.hooksPath），AGENTS.md 是 Codex 生成的说明文件
+.githooks/
+AGENTS.md
