@@ -10,7 +10,6 @@
   export let session: Session | null = null;
   export let messages: Message[] = [];
   export let running = false;
-  export let queued = 0;
   export let errorText = '';
   export let onSend: (prompt: string) => Promise<void>;
   export let onStop: () => void;
@@ -134,16 +133,12 @@
     return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   }
 
-  $: statusText = running ? '运行中' : queued > 0 ? `排队中 ${queued}` : '';
 </script>
 
 <header class="chat-header">
   <div class="chat-heading">
     <strong>{session ? session.title : '新对话'}</strong>
-    <span>
-      {#if running}<i class="dot"></i>{/if}
-      {project ? project.name : '未选择项目'}{statusText ? ` · ${statusText}` : ''}
-    </span>
+    <span>{project ? project.name : '未选择项目'}</span>
   </div>
   <button
     class="icon-btn"

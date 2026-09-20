@@ -165,14 +165,14 @@
     closePanel();
   }
 
-  async function selectSession(session: Session) {
+  async function selectSession(session: Session, keepPanel = false) {
     if (session.project_id && session.project_id !== activeProjectId) {
       activeProjectId = session.project_id;
       localStorage.setItem('ral-project', session.project_id);
     }
     activeSessionId = session.id;
     chatError = '';
-    closePanel();
+    if (!keepPanel) closePanel();
     await Promise.all([loadMessages(), refreshStatus(), loadFiles('')]);
   }
 
@@ -665,7 +665,7 @@
         <TreePanel
           {projects}
           {activeSessionId}
-          onSelectSession={(_, session) => void selectSession(session)}
+          onSelectSession={(_, session) => void selectSession(session, true)}
           onNewProject={() => {
             newProjectName = '';
             sheetError = '';
@@ -705,7 +705,6 @@
           session={activeSession}
           {messages}
           {running}
-          {queued}
           errorText={chatError}
           onSend={sendMessage}
           onStop={stopTurn}
