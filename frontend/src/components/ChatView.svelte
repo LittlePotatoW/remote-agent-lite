@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { afterUpdate, onMount } from 'svelte';
+  import { afterUpdate, onMount, tick } from 'svelte';
   import DOMPurify from 'dompurify';
   import { marked } from 'marked';
   import Icon from './Icon.svelte';
@@ -114,6 +114,7 @@
     try {
       await onSend(value);
       prompt = '';
+      await tick();
       grow();
     } catch {
       /* 失败信息由外层展示，输入内容保留 */
