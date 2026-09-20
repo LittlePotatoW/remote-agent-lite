@@ -12,6 +12,7 @@
   export let onEntryMenu: (entry: FileEntry, event: MouseEvent) => void;
   export let onPick: (files: FileList) => void;
   export let onOpen: (entry: FileEntry) => void;
+  export let onClose: () => void;
 
   let input: HTMLInputElement;
 
@@ -19,6 +20,9 @@
 </script>
 
 <header class="panel-header">
+  <button class="icon-btn" type="button" aria-label="关闭面板" on:click={onClose}>
+    <Icon name="close" size={20} />
+  </button>
   <button
     class="icon-btn"
     type="button"

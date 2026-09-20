@@ -16,6 +16,8 @@
   export let onStop: () => void;
   export let onNewSession: () => void;
   export let onImage: (src: string, alt: string) => void;
+  export let onOpenTree: () => void;
+  export let onOpenFiles: () => void;
 
   marked.setOptions({ breaks: true, gfm: true });
 
@@ -133,6 +135,11 @@
 </script>
 
 <header class="chat-header">
+  <div class="chat-side">
+    <button class="icon-btn" type="button" aria-label="打开项目与对话列表" on:click={onOpenTree}>
+      <Icon name="menu" size={22} />
+    </button>
+  </div>
   <div class="chat-heading">
     <strong>{session ? session.title : '新对话'}</strong>
     <span>
@@ -140,15 +147,26 @@
       {project ? project.name : '未选择项目'}{statusText ? ` · ${statusText}` : ''}
     </span>
   </div>
-  <button
-    class="icon-btn"
-    type="button"
-    aria-label="新建对话"
-    disabled={!project}
-    on:click={onNewSession}
-  >
-    <Icon name="plus" size={22} />
-  </button>
+  <div class="chat-side right">
+    <button
+      class="icon-btn"
+      type="button"
+      aria-label="打开文件列表"
+      disabled={!project}
+      on:click={onOpenFiles}
+    >
+      <Icon name="folder" size={21} />
+    </button>
+    <button
+      class="icon-btn"
+      type="button"
+      aria-label="新建对话"
+      disabled={!project}
+      on:click={onNewSession}
+    >
+      <Icon name="plus" size={22} />
+    </button>
+  </div>
 </header>
 
 <div class="chat-scroll" bind:this={scrollBox} on:scroll={handleScroll}>
@@ -156,7 +174,7 @@
     <div class="chat-empty">
       <div class="mark"><Icon name="folder" size={28} /></div>
       <strong>先去左边选一个项目</strong>
-      <p>手指向右滑动打开项目列表</p>
+      <p>点左上角按钮，或向右滑动打开项目列表</p>
     </div>
   {:else if messages.length === 0}
     <div class="chat-empty">

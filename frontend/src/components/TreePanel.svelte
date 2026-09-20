@@ -10,6 +10,7 @@
   export let onProjectMenu: (project: Project, event: MouseEvent) => void;
   export let onSessionMenu: (session: Session, event: MouseEvent) => void;
   export let onOpenSettings: () => void;
+  export let onClose: () => void;
 
   let collapsed: Record<string, boolean> = {};
 
@@ -19,6 +20,9 @@
 </script>
 
 <header class="panel-header">
+  <button class="icon-btn" type="button" aria-label="关闭面板" on:click={onClose}>
+    <Icon name="close" size={20} />
+  </button>
   <div class="panel-title"><strong>项目</strong></div>
   <button class="icon-btn" type="button" on:click={onNewProject} aria-label="新建项目">
     <Icon name="plus" size={22} />
