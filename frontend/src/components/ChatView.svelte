@@ -4,6 +4,7 @@
   import { marked } from 'marked';
   import Icon from './Icon.svelte';
   import { downloadUrl, localProjectPath, mapImageSrc } from '../lib/media';
+  import { prepareImages, revokeImages, type PendingImage } from '../lib/image';
   import type { Message, Project, Session } from '../lib/types';
 
   export let project: Project | null = null;
@@ -11,7 +12,7 @@
   export let messages: Message[] = [];
   export let running = false;
   export let errorText = '';
-  export let onSend: (prompt: string) => Promise<void>;
+  export let onSend: (prompt: string, images: PendingImage[]) => Promise<void>;
   export let onStop: () => void;
   export let onNewSession: () => void;
   export let onImage: (src: string, alt: string) => void;
@@ -21,6 +22,10 @@
   marked.setOptions({ breaks: true, gfm: true });
 
   let prompt = '';
+  let pending: PendingImage[] = [];
+  let imageError = '';
+  let dragging = false;
+  let fileInput: HTMLInputElement;
   let sending = false;
   let scrollBox: HTMLDivElement;
   let textarea: HTMLTextAreaElement;
@@ -107,18 +112,79 @@
     };
   });
 
+  async function addFiles(files: Iterable<File> | null | undefined) {
+    const list = files ? Array.from(files) : [];
+    if (!list.length || !session) return;
+    const { images, errors } = await prepareImages(list);
+    pending = [...pending, ...images];
+    imageError = errors.join('；');
+    await tick();
+    grow();
+  }
+
+  function pickImages() {
+    fileInput?.click();
+  }
+
+  function removeImage(id: string) {
+    revokeImages(pending.filter((image) => image.id === id));
+    pending = pending.filter((image) => image.id !== id);
+    if (!pending.length) imageError = '';
+  }
+
+  function handleFileInput(event: Event) {
+    const input = event.target as HTMLInputElement;
+    void addFiles(input.files);
+    input.value = '';
+  }
+
+  function handlePaste(event: ClipboardEvent) {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (const item of Array.from(items)) {
+      if (item.kind !== 'file') continue;
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+    if (!files.length) return;
+    event.preventDefault();
+    void addFiles(files);
+  }
+
+  function handleDragOver(event: DragEvent) {
+    if (!session || !event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault();
+    dragging = true;
+  }
+
+  function handleDragLeave() {
+    dragging = false;
+  }
+
+  function handleDrop(event: DragEvent) {
+    dragging = false;
+    if (!session || !event.dataTransfer?.files?.length) return;
+    event.preventDefault();
+    void addFiles(event.dataTransfer.files);
+  }
+
   async function send() {
     const value = prompt.trim();
-    if (!value || sending || !session) return;
+    if ((!value && pending.length === 0) || sending || !session) return;
+    const outgoing = pending;
     sending = true;
     follow = true;
     try {
-      await onSend(value);
+      await onSend(value, outgoing);
       prompt = '';
+      pending = [];
+      imageError = '';
+      revokeImages(outgoing);
       await tick();
       grow();
     } catch {
-      /* 失败信息由外层展示，输入内容保留 */
+      /* 失败信息由外层展示，输入内容与待发图片保留 */
     } finally {
       sending = false;
     }
@@ -211,37 +277,90 @@
 {/if}
 
 <div class="composer">
-  <div class="composer-card">
-    <textarea
-      bind:this={textarea}
-      rows="1"
-      placeholder={session ? '输入消息…' : '先选择一个对话'}
-      aria-label="消息内容"
-      bind:value={prompt}
-      disabled={!session}
-      enterkeyhint="enter"
-      on:input={grow}
-      on:keydown={keydown}
-    ></textarea>
-    {#if running}
-      <button class="send-btn" type="button" aria-label="停止" on:click={onStop}>
-        <Icon name="stop" size={18} />
-      </button>
-    {:else}
-      <button
-        class="send-btn"
-        type="button"
-        aria-label="发送"
-        disabled={!session || !prompt.trim()}
-        on:click={send}
-      >
-        <Icon name="send" size={20} stroke={2} />
-      </button>
+  <div
+    class="composer-card"
+    class:dragging
+    on:dragover={handleDragOver}
+    on:dragleave={handleDragLeave}
+    on:drop={handleDrop}
+    role="presentation"
+  >
+    {#if pending.length > 0}
+      <div class="pending-images">
+        {#each pending as image (image.id)}
+          <div class="pending-image">
+            <button
+              class="pending-thumb"
+              type="button"
+              aria-label="预览 {image.name}"
+              on:click={() => onImage(image.previewUrl, image.name)}
+            >
+              <img src={image.previewUrl} alt={image.name} />
+            </button>
+            <button
+              class="pending-remove"
+              type="button"
+              aria-label="移除 {image.name}"
+              on:click={() => removeImage(image.id)}
+            >
+              <Icon name="close" size={11} stroke={2.2} />
+            </button>
+          </div>
+        {/each}
+      </div>
     {/if}
+    <div class="composer-row">
+      <button
+        class="attach-btn"
+        type="button"
+        aria-label="添加图片"
+        disabled={!session}
+        on:click={pickImages}
+      >
+        <Icon name="image" size={20} />
+      </button>
+      <textarea
+        bind:this={textarea}
+        rows="1"
+        placeholder={session ? '输入消息…' : '先选择一个对话'}
+        aria-label="消息内容"
+        bind:value={prompt}
+        disabled={!session}
+        enterkeyhint="enter"
+        on:input={grow}
+        on:keydown={keydown}
+        on:paste={handlePaste}
+      ></textarea>
+      {#if running}
+        <button class="send-btn" type="button" aria-label="停止" on:click={onStop}>
+          <Icon name="stop" size={18} />
+        </button>
+      {:else}
+        <button
+          class="send-btn"
+          type="button"
+          aria-label="发送"
+          disabled={!session || (!prompt.trim() && pending.length === 0)}
+          on:click={send}
+        >
+          <Icon name="send" size={20} stroke={2} />
+        </button>
+      {/if}
+    </div>
+    <input
+      bind:this={fileInput}
+      class="file-input"
+      type="file"
+      accept="image/*"
+      multiple
+      on:change={handleFileInput}
+    />
   </div>
-  {#if errorText || sending}
+  {#if errorText || imageError || sending}
     <div class="status-line" aria-live="polite">
       {#if errorText}<span style="color:var(--danger)">{errorText}</span>{/if}
+      {#if imageError}<span style="color:var(--danger)">{imageError}</span>{/if}
+      {#if sending}<span>发送中…</span>{/if}
     </div>
   {/if}
 </div>

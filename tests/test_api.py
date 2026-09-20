@@ -132,3 +132,41 @@ def test_image_raw_endpoint(settings) -> None:
         assert client.get(url, params={"path": "missing.png"}).status_code == 404
         assert client.get(url, params={"path": "../escape.png"}).status_code == 404
         assert client.get(f"/api/projects/{project['id']}/files/raw").status_code == 422
+
+
+def test_turn_accepts_inline_images_without_persisting_them(settings) -> None:
+    import base64
+
+    settings.ensure_dirs()
+    app = create_app(settings)
+    with TestClient(app) as client:
+        _login(client)
+        project = client.post("/api/projects", json={"name": "Chat images"}).json()["project"]
+        session = client.post(
+            f"/api/projects/{project['id']}/sessions", json={}
+        ).json()["session"]
+        url = f"/api/sessions/{session['id']}/turns"
+
+        assert client.post(url, json={"prompt": "   "}).status_code == 422
+        assert client.post(url, json={"prompt": ""}).status_code == 422
+
+        rejected = client.post(
+            url,
+            json={"prompt": "看图", "images": [{"data_url": "data:text/plain;base64,aGk="}]},
+        )
+        assert rejected.status_code == 400, rejected.text
+
+        data_url = "data:image/png;base64," + base64.b64encode(
+            b"\x89PNG\r\n\x1a\n" + b"body"
+        ).decode()
+        accepted = client.post(
+            url,
+            json={
+                "images": [{"name": "shot.png", "data_url": data_url}],
+            },
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["message"]["content"] == "请看这张图片。"
+
+        stored = client.get(f"/api/sessions/{session['id']}/messages").json()["messages"]
+        assert all("base64" not in (message["content"] or "") for message in stored)

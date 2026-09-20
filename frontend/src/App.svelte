@@ -10,6 +10,7 @@
   import { ApiError, client, subscribeEvents, uploadFile } from './lib/api';
   import { applyTheme, readTheme } from './lib/theme';
   import { isImagePath, rawImageUrl } from './lib/media';
+  import type { PendingImage } from './lib/image';
   import type {
     FileEntry,
     MenuItem,
@@ -248,11 +249,15 @@
 
   /* ---------- 对话 ---------- */
 
-  async function sendMessage(prompt: string) {
+  async function sendMessage(prompt: string, images: PendingImage[] = []) {
     if (!activeSessionId) return;
     chatError = '';
     try {
-      await client.send(activeSessionId, prompt);
+      await client.send(
+        activeSessionId,
+        prompt,
+        images.map((image) => ({ name: image.name, data_url: image.dataUrl }))
+      );
       await Promise.all([loadMessages(), refreshStatus()]);
       scheduleOverview();
     } catch (error) {

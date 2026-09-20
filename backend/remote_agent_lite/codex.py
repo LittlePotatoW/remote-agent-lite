@@ -6,12 +6,13 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator, Callable, Sequence
 
 import websockets
 
 from .config import Settings
 from .context import render_global_guidance
+from .images import ChatImage
 from .utils import new_id
 
 
@@ -190,6 +191,7 @@ class CodexClient:
         prompt: str,
         *,
         cwd: Path,
+        images: Sequence[ChatImage] = (),
         client_user_message_id: str | None = None,
     ) -> TurnStream:
         stream = TurnStream(thread_id=thread_id)
@@ -203,7 +205,13 @@ class CodexClient:
                     "model": self.settings.codex_model or None,
                     "sandboxPolicy": {"type": "dangerFullAccess"},
                     "approvalPolicy": "never",
-                    "input": [{"type": "text", "text": prompt}],
+                    "input": [
+                        *(
+                            {"type": "image", "url": image.data_url, "detail": "auto"}
+                            for image in images
+                        ),
+                        {"type": "text", "text": prompt},
+                    ],
                     "clientUserMessageId": client_user_message_id or new_id(),
                 },
                 timeout=60,
