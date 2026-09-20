@@ -25,7 +25,9 @@
     stop: '<rect x="7" y="7" width="10" height="10" rx="2.5" fill="currentColor" stroke="none"/>',
     terminal: '<path d="M6.5 8.5 10.5 12l-4 3.5"/><path d="M12.5 16h6"/>',
     chevronDown: '<path d="M6.5 9.5 12 15l5.5-5.5"/>',
-    chevronRight: '<path d="M9.5 6.5 15 12l-5.5 5.5"/>'
+    chevronRight: '<path d="M9.5 6.5 15 12l-5.5 5.5"/>',
+    menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>'
   };
 </script>
 

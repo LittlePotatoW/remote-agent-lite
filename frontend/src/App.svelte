@@ -398,6 +398,7 @@
     }
     axis = 'idle';
     dragging = false;
+    pull = panel ? panelWidth() : 0;
   }
 
   function onScrimClick() {
@@ -655,13 +656,14 @@
   <div class="shell">
     <div
       class="stage"
+      class:dragging
       role="presentation"
       on:pointerdown={onPointerDown}
       on:pointermove={onPointerMove}
       on:pointerup={onPointerUp}
       on:pointercancel={onPointerUp}
     >
-      <aside class="panel tree" style="--pull:{panel === 'tree' ? pull : 0}px">
+      <aside class="panel tree" style="--pull:{side === 'tree' ? pull : 0}px">
         <TreePanel
           {projects}
           {activeSessionId}
@@ -678,10 +680,11 @@
             showSettings = true;
             void refreshServerInfo();
           }}
+          onClose={closePanel}
         />
       </aside>
 
-      <aside class="panel files" style="--pull:{panel === 'files' ? pull : 0}px">
+      <aside class="panel files" style="--pull:{side === 'files' ? pull : 0}px">
         <FilesPanel
           project={activeProject}
           path={filePath}
@@ -692,13 +695,13 @@
           onEntryMenu={openEntryMenu}
           onPick={(files) => void pickFiles(files)}
           onOpen={openEntry}
+          onClose={closePanel}
         />
       </aside>
 
       <main
         class="page"
-        class:dragging
-        style="--shift:{panel === 'tree' ? pull : panel === 'files' ? -pull : 0}px; --page-radius:{panel ? 20 : 0}px; --page-shadow:{panel ? 'var(--shadow-panel)' : 'none'}"
+        style="--shift:{side === 'tree' ? pull : side === 'files' ? -pull : 0}px; --page-radius:{pull > 0 ? 20 : 0}px; --page-shadow:{pull > 0 ? 'var(--shadow-panel)' : 'none'}"
       >
         <ChatView
           project={activeProject}
@@ -709,6 +712,8 @@
           onSend={sendMessage}
           onStop={stopTurn}
           onImage={(src, alt) => (lightbox = { src, alt })}
+          onOpenTree={() => openPanel('tree')}
+          onOpenFiles={() => openPanel('files')}
           onNewSession={() => {
             if (activeProject) void createSessionIn(activeProject);
           }}
