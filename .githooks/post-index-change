@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# git 没有 pre-add 钩子，暂存动作无法被直接阻止；这里在索引写入后复查一遍，
+# 把违规文件自动撤出暂存区并给出警告，让「暂存」这一步也拦得住。
+set -o pipefail
+
+[ "${RAL_HOOKS_INTERNAL:-0}" = "1" ] && exit 0
+
+RAL_HOOKS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=.githooks/hooks-lib.sh
+. "$RAL_HOOKS_DIR/hooks-lib.sh"
+
+ral_scan_staged
+
+if [ "$(ral_violation_count)" -eq 0 ]; then
+  exit 0
+fi
+
+ral_stderr "⚠️  git hook：暂存区里有不允许提交的文件"
+ral_print_violations "已发现："
+
+if [ "$RAL_AUTO_UNSTAGE" = "1" ]; then
+  failed=0
+  for path in "${RAL_V_PATH[@]:-}"; do
+    [ -n "$path" ] || continue
+    ral_unstage_path "$path" || failed=$((failed + 1))
+  done
+  if [ "$failed" -eq 0 ]; then
+    ral_stderr ""
+    ral_stderr "  上面这些文件已被自动移出暂存区，你的工作区文件没有被改动。"
+  else
+    ral_stderr ""
+    ral_stderr "  有 $failed 个文件无法自动移出，请手动执行 git restore --staged -- <路径>"
+  fi
+else
+  ral_stderr ""
+  ral_stderr "  RAL_AUTO_UNSTAGE=0，未自动撤销；提交时仍会被 pre-commit 拦下。"
+fi
+ral_print_footer
+exit 0

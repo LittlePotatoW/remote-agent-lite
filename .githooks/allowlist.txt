@@ -1,0 +1,10 @@
+# 例外清单：每行一个 shell glob，命中「整个路径」或「路径中的任意一段」即跳过检查。
+# 通配符里 * 会匹配 / ，所以 assets/* 可覆盖 assets 目录下所有文件。
+# 空行和 # 开头的注释会被忽略。改动这里会进入代码评审，属于有意为之的例外。
+
+# 配置模板本身不是机密，只有真实的 .env 才该拦
+.env.example
+.env.sample
+.env.template
+*.env.example
+deploy/remote-agent-lite.env.example
