@@ -11,6 +11,7 @@ from .db import Database
 from .events import EventBus
 from .projects import ProjectService
 from .queueing import JobQueue
+from .scheduled import ScheduledTaskService
 from .security import AuthService
 from .sessions import SessionService
 from .storage import FileService, UploadService
@@ -28,6 +29,7 @@ class AppState:
     events: EventBus
     codex: CodexClient
     queue: JobQueue
+    scheduled: ScheduledTaskService
 
 
 def state(request: Request) -> AppState:

@@ -83,6 +83,9 @@
                 {#if session.pinned}
                   <span class="icon-btn" aria-label="已置顶"><Icon name="pin" size={16} /></span>
                 {/if}
+                {#if (session.scheduled_pending ?? 0) > 0}
+                  <span class="icon-btn" aria-label="有定时任务"><Icon name="clock" size={16} /></span>
+                {/if}
                 {#if session.id === activeSessionId}
                   <button
                     class="icon-btn"
