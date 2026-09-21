@@ -11,6 +11,7 @@
   import { applyTheme, readTheme } from './lib/theme';
   import { isImagePath, rawImageUrl } from './lib/media';
   import type { PendingImage } from './lib/image';
+  import { swipeAxis, swipeKeepsOpen, swipeStartedAtEdge } from './lib/swipe';
   import type {
     FileEntry,
     MenuItem,
@@ -74,6 +75,11 @@
 
   let startX = 0;
   let startY = 0;
+  let startEdge = false;
+  let moveTime = 0;
+  let prevDx = 0;
+  let lastDx = 0;
+  let recentVelocity = 0;
   let axis: 'idle' | 'pending' | 'horizontal' | 'vertical' = 'idle';
   let base = 0;
 
@@ -358,12 +364,19 @@
   function onPointerDown(event: PointerEvent) {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     const target = event.target as HTMLElement;
-    if (target.closest('button, a, input, textarea, .sheet, .menu, .settings-page')) return;
+    // 列表行也要能起手拖动（面板展开时基本只能按在行上），只放过真正的控件。
+    if (target.closest('input, textarea, .sheet, .menu, .settings-page, .row-tail, .icon-btn'))
+      return;
     startX = event.clientX;
     startY = event.clientY;
+    startEdge = swipeStartedAtEdge(startX, window.innerWidth);
     axis = 'pending';
     base = panel ? panelWidth() : 0;
     side = panel ?? 'tree';
+    moveTime = performance.now();
+    prevDx = 0;
+    lastDx = 0;
+    recentVelocity = 0;
   }
 
   function onPointerMove(event: PointerEvent) {
@@ -371,8 +384,9 @@
     const dx = event.clientX - startX;
     const dy = event.clientY - startY;
     if (axis === 'pending') {
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
-      if (Math.abs(dx) < Math.abs(dy) * 1.2) {
+      const decision = swipeAxis(dx, dy, startEdge);
+      if (decision === 'pending') return;
+      if (decision === 'vertical') {
         axis = 'vertical';
         return;
       }
@@ -381,6 +395,15 @@
       if (!panel) side = dx > 0 ? 'tree' : 'files';
     }
     if (axis !== 'horizontal') return;
+    // 记录最近一段的位移速度，用来识别快速轻扫。
+    const now = performance.now();
+    const elapsed = now - moveTime;
+    if (elapsed > 0) {
+      recentVelocity = (dx - prevDx) / elapsed;
+      moveTime = now;
+      prevDx = dx;
+    }
+    lastDx = dx;
     const width = panelWidth();
     let next: number;
     if (panel === 'tree') next = base + dx;
@@ -392,7 +415,8 @@
   function onPointerUp() {
     if (axis === 'horizontal') {
       const width = panelWidth();
-      if (pull > width * 0.4) {
+      const keep = swipeKeepsOpen({ pull, base, panel, lastDx, recentVelocity, width });
+      if (keep) {
         panel = side;
         pull = width;
       } else {
@@ -404,6 +428,16 @@
     axis = 'idle';
     dragging = false;
     pull = panel ? panelWidth() : 0;
+    lastDx = 0;
+    recentVelocity = 0;
+  }
+
+  // 拖动结束后紧跟的 click 是手势的尾巴，不该被当成点击。
+  function onClickCapture(event: MouseEvent) {
+    if (Date.now() - dragEndedAt < 250) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   }
 
   function onScrimClick() {
@@ -683,6 +717,7 @@
       on:pointermove={onPointerMove}
       on:pointerup={onPointerUp}
       on:pointercancel={onPointerUp}
+      on:click|capture={onClickCapture}
     >
       <aside class="panel tree" style="--pull:{side === 'tree' ? pull : 0}px">
         <TreePanel
