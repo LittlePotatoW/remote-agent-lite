@@ -1,4 +1,5 @@
 import type {
+  ChatImagePayload,
   FileEntry,
   Message,
   Project,
@@ -82,6 +83,9 @@ export const client = {
       body: JSON.stringify({})
     });
   },
+  duplicateSession(id: string) {
+    return api<{ session: Session }>(`/api/sessions/${id}/duplicate`, { method: 'POST' });
+  },
   updateSession(id: string, patch: { title?: string; pinned?: boolean }) {
     return api<{ session: Session }>(`/api/sessions/${id}`, {
       method: 'PATCH',
@@ -97,10 +101,10 @@ export const client = {
       `/api/sessions/${sessionId}/messages${query}`
     );
   },
-  send(sessionId: string, prompt: string) {
+  send(sessionId: string, prompt: string, images: ChatImagePayload[] = []) {
     return api<{ job_id: string; message: Message; status: string }>(
       `/api/sessions/${sessionId}/turns`,
-      { method: 'POST', body: JSON.stringify({ prompt }) }
+      { method: 'POST', body: JSON.stringify(images.length ? { prompt, images } : { prompt }) }
     );
   },
   interrupt(sessionId: string) {

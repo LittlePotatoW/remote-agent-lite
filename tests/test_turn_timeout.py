@@ -19,7 +19,9 @@ class SilentCodex:
     async def ensure_thread(self, session, cwd):
         return "thread-timeout", True
 
-    async def start_turn(self, thread_id, prompt, *, cwd, client_user_message_id=None):
+    async def start_turn(
+        self, thread_id, prompt, *, cwd, images=(), client_user_message_id=None
+    ):
         return TurnStream(thread_id=thread_id, turn_id="turn-timeout")
 
     async def interrupt(self, thread_id, turn_id):

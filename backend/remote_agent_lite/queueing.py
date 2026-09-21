@@ -3,18 +3,23 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .codex import CodexClient, CodexError, TurnStream
 from .config import Settings
 from .db import Database
 from .events import EventBus
+from .images import ChatImage
 from .projects import ProjectService
 from .sessions import DEFAULT_TITLE, SessionService
 from .utils import iso, new_id
 
 
 logger = logging.getLogger(__name__)
+
+
+#: Used when a turn carries images but no text, so history still reads sensibly.
+IMAGE_ONLY_PROMPT = "请看这张图片。"
 
 
 class JobQueue:
@@ -38,6 +43,9 @@ class JobQueue:
         self._running_job_id: str | None = None
         self._stopping = False
         self._recovered_tasks: set[asyncio.Task[Any]] = set()
+        # Inline chat images live here only until the job runs. They are never
+        # written to the database, to project storage or to logs.
+        self._images: dict[str, list[ChatImage]] = {}
 
     async def start(self) -> None:
         await self.recover()
@@ -52,15 +60,21 @@ class JobQueue:
             except asyncio.CancelledError:
                 pass
 
-    async def enqueue(self, session_id: str, prompt: str) -> dict[str, Any]:
+    async def enqueue(
+        self,
+        session_id: str,
+        prompt: str,
+        images: Sequence[ChatImage] | None = None,
+    ) -> dict[str, Any]:
         session = await self.sessions.get(session_id)
         project = await self.projects.get(session["project_id"])
         ok, reason = await self.projects.can_accept_bytes(project["id"], 0)
         if not ok:
             raise RuntimeError(reason)
         job_id = new_id()
+        text = prompt.strip() or IMAGE_ONLY_PROMPT
         message = await self.sessions.add_message(
-            session_id, "user", prompt, status="completed"
+            session_id, "user", text, status="completed"
         )
         now = iso()
         await self.db.execute(
@@ -68,10 +82,12 @@ class JobQueue:
             INSERT INTO jobs(id, session_id, project_id, message_id, prompt, status, created_at)
             VALUES(?, ?, ?, ?, ?, 'queued', ?)
             """,
-            (job_id, session_id, project["id"], message["id"], prompt, now),
+            (job_id, session_id, project["id"], message["id"], text, now),
         )
+        if images:
+            self._images[job_id] = list(images)
         if session["title"] == DEFAULT_TITLE and session["last_message_seq"] == 0:
-            title = " ".join(prompt.split())[:30] or DEFAULT_TITLE
+            title = " ".join(text.split())[:30] or DEFAULT_TITLE
             await self.sessions.rename(session_id, title)
         await self.events.publish(
             "turn.status",
@@ -123,6 +139,7 @@ class JobQueue:
             (session_id,),
         )
         for row in queued:
+            self._images.pop(row["id"], None)
             await self._mark_job(row["id"], "cancelled", "cancelled before start")
         return {"status": "cancelled", "count": len(queued)}
 
@@ -229,6 +246,9 @@ class JobQueue:
                 self._queue.task_done()
 
     async def _run_job(self, job_id: str) -> None:
+        # A job recovered after a restart has no images any more: they only ever
+        # existed in memory, so recovery simply runs it as a text-only turn.
+        images = self._images.pop(job_id, [])
         job = await self.db.fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
         if not job or job["status"] != "queued":
             return
@@ -263,6 +283,7 @@ class JobQueue:
                 thread_id,
                 job["prompt"],
                 cwd=project_dir,
+                images=images,
                 client_user_message_id=job["id"],
             )
             await self._consume_stream(job, session, project, message["id"], stream)
@@ -429,6 +450,7 @@ class JobQueue:
     async def _fail_job(
         self, job: Any, error: str, *, message_id: str | None = None
     ) -> None:
+        self._images.pop(job["id"], None)
         await self._mark_job(job["id"], "failed", error)
         if message_id:
             await self.sessions.update_message(message_id, status="failed", error=error)

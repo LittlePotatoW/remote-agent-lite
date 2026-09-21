@@ -51,6 +51,11 @@ export interface Message {
   error?: string | null;
 }
 
+export interface ChatImagePayload {
+  name: string;
+  data_url: string;
+}
+
 export interface FileEntry {
   name: string;
   path: string;
