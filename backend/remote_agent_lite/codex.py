@@ -47,7 +47,7 @@ class TurnStream:
     _completed: bool = False
 
     async def push_delta(self, delta: str) -> None:
-        if not delta:
+        if not delta or self._completed:
             return
         await self._deltas.put(delta)
 
@@ -98,9 +98,17 @@ class TurnStream:
                 )
             )
 
+    async def next_delta(self, timeout: float | None = None) -> str | None:
+        """取下一段增量：流结束返回 None，超时抛 asyncio.TimeoutError。"""
+        if timeout is None:
+            item = await self._deltas.get()
+        else:
+            item = await asyncio.wait_for(self._deltas.get(), timeout)
+        return None if item is None else item
+
     async def deltas(self) -> AsyncIterator[str]:
         while True:
-            item = await self._deltas.get()
+            item = await self.next_delta()
             if item is None:
                 break
             yield item
@@ -403,14 +411,14 @@ class CodexClient:
     async def _handle_notification(self, method: str, params: dict[str, Any]) -> None:
         thread_id = params.get("threadId")
         if method == "item/agentMessage/delta":
-            stream = self._streams.get(thread_id or "")
+            stream = self._stream_for(params)
             if stream:
                 await stream.push_delta(params.get("delta") or "")
             return
         if method == "item/completed":
             item = params.get("item") or {}
             if item.get("type") == "agentMessage":
-                stream = self._streams.get(thread_id or "")
+                stream = self._stream_for(params)
                 if stream:
                     await stream.set_final(item.get("text") or "")
             return
@@ -429,7 +437,7 @@ class CodexClient:
                 await stream.complete(turn)
             return
         if method == "error":
-            stream = self._streams.get(thread_id or "")
+            stream = self._stream_for(params)
             if stream:
                 error = params.get("error") or params.get("message") or "Codex error"
                 self._streams.pop(thread_id or "", None)
@@ -437,6 +445,16 @@ class CodexClient:
             return
         if method in {"thread/statusChanged", "warning", "deprecationNotice"}:
             return
+
+    def _stream_for(self, params: dict[str, Any]) -> TurnStream | None:
+        """按 threadId 找流；通知带 turnId 时还要确认是当前这一次 turn，避免串台。"""
+        stream = self._streams.get(params.get("threadId") or "")
+        if stream is None:
+            return None
+        turn_id = params.get("turnId")
+        if turn_id and stream.turn_id and turn_id != stream.turn_id:
+            return None
+        return stream
 
     async def _reply_unsupported(self, request_id: Any, method: str) -> None:
         with contextlib.suppress(Exception):

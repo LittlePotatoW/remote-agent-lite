@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from .codex import CodexError
 from .deps import AppState, current_auth, optional_auth, state
+from .events import resync_event
 from .images import ImageInputError, parse_images
 from .server_info import collect_server_info
 from .storage import IMAGE_MEDIA_TYPES, StorageError
@@ -79,14 +80,39 @@ def _client_ip(request: Request) -> str:
         return candidate
 
 
-async def _wait_until_idle(app_state: AppState, where: str, value: str) -> None:
-    for _ in range(100):
+# 删除项目/会话前等待运行中任务结束的上限。超时不再「猜它结束了」，
+# 而是拒绝删除，避免把还在写的目录删到一半。
+DELETE_IDLE_TIMEOUT_SECONDS = 20.0
+
+
+async def _wait_until_idle(app_state: AppState, where: str, value: str) -> bool:
+    """等到没有运行中的任务；超时返回 False。"""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + DELETE_IDLE_TIMEOUT_SECONDS
+    while True:
         running = await app_state.db.fetchone(
             f"SELECT 1 FROM jobs WHERE {where} = ? AND status = 'running' LIMIT 1", (value,)
         )
         if not running:
-            return
+            return True
+        if loop.time() >= deadline:
+            return False
         await asyncio.sleep(0.1)
+
+
+async def _read_body_limited(request: Request, limit: int) -> bytes:
+    """读取请求体，超过 limit 字节立刻中断，不把超大 body 读进内存。"""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise HTTPException(status_code=413, detail="上传分片超过大小上限")
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail="上传分片超过大小上限")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @router.get("/auth/status")
@@ -217,7 +243,11 @@ async def delete_project(
             await app_state.queue.cancel(session["id"])
         except Exception:
             pass
-    await _wait_until_idle(app_state, "project_id", project_id)
+    if not await _wait_until_idle(app_state, "project_id", project_id):
+        raise HTTPException(
+            status_code=409,
+            detail="这个项目里还有任务在运行，请先点停止，等它结束后再删除",
+        )
     await app_state.projects.delete(project_id)
     return {"ok": True}
 
@@ -319,7 +349,11 @@ async def delete_session(
         await app_state.queue.cancel(session_id)
     except Exception:
         pass
-    await _wait_until_idle(app_state, "session_id", session_id)
+    if not await _wait_until_idle(app_state, "session_id", session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="这个对话里还有任务在运行，请先点停止，等它结束后再删除",
+        )
     if session.get("thread_id"):
         try:
             await app_state.codex.delete_thread(session["thread_id"])
@@ -502,7 +536,11 @@ async def upload_part(
     _: Any = Depends(current_auth),
 ):
     app_state: AppState = state(request)
-    body = await request.body()
+    try:
+        limit = await app_state.uploads.chunk_limit(upload_id)
+    except (StorageError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    body = await _read_body_limited(request, limit)
     try:
         return await app_state.uploads.put_part(upload_id, part_index, body)
     except (StorageError, ValueError) as exc:
@@ -576,6 +614,8 @@ async def events(
                 except asyncio.TimeoutError:
                     yield ": heartbeat\n\n"
                     continue
+                if await app_state.events.take_resync(queue):
+                    yield resync_event(session_id=session_id).to_sse()
                 if event.session_id and session_id and event.session_id != session_id:
                     continue
                 yield event.to_sse()

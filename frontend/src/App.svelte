@@ -214,7 +214,18 @@
         void refreshStatus();
         scheduleOverview();
       },
-      'turn.status': () => {
+      'turn.status': (payload) => {
+        // 终态时补一次全量拉取：即使 message.completed 事件被丢弃也能自愈
+        const status = String(payload.status || '');
+        if (status === 'succeeded' || status === 'failed' || status === 'interrupted') {
+          void loadMessages();
+        }
+        void refreshStatus();
+        scheduleOverview();
+      },
+      resync: () => {
+        // 服务端提示订阅队列丢过事件，重新拉取权威状态
+        void loadMessages();
         void refreshStatus();
         scheduleOverview();
       },

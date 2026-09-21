@@ -315,8 +315,17 @@ class JobQueue:
         last_publish = last_persist
         pending_delta = ""
         seq = await self._message_seq(message_id)
+        # 超时要从第一个增量就开始算：原来只在最后等 stream.done，
+        # 而它要等流结束才会完成，等于超时几乎永远不会触发。
+        deadline = last_persist + self.settings.codex_turn_timeout_seconds
         try:
-            async for delta in stream.deltas():
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                delta = await stream.next_delta(timeout=remaining)
+                if delta is None:
+                    break
                 accumulated += delta
                 pending_delta += delta
                 now = asyncio.get_running_loop().time()
@@ -342,9 +351,12 @@ class JobQueue:
                     project_id=project["id"],
                 )
             result = await asyncio.wait_for(
-                stream.done, timeout=self.settings.codex_turn_timeout_seconds
+                stream.done,
+                timeout=max(0.1, deadline - asyncio.get_running_loop().time()),
             )
         except asyncio.TimeoutError:
+            logger.warning("turn %s timed out; interrupting", stream.turn_id)
+            await self._interrupt_stream(stream)
             await stream.fail("turn timed out")
             result = await stream.done
         except Exception as exc:
@@ -379,6 +391,15 @@ class JobQueue:
                 session_id=session["id"],
                 project_id=project["id"],
             )
+
+    async def _interrupt_stream(self, stream: TurnStream) -> None:
+        """尽力打断服务端仍在跑的 turn；失败只记录日志，不改变超时的结论。"""
+        if not stream.turn_id:
+            return
+        try:
+            await self.codex.interrupt(stream.thread_id, stream.turn_id)
+        except Exception:
+            logger.warning("failed to interrupt turn %s", stream.turn_id, exc_info=True)
 
     async def _complete_job(
         self,
