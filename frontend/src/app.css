@@ -164,7 +164,6 @@ button {
   gap: 4px;
   min-height: calc(var(--topbar) + var(--safe-top));
   padding: var(--safe-top) 8px 0 8px;
-  border-bottom: 1px solid var(--border);
   background: var(--bg);
   flex: none;
 }
@@ -201,7 +200,6 @@ button {
 .panel-footer {
   flex: none;
   padding: 8px 12px calc(10px + var(--safe-bottom));
-  border-top: 1px solid var(--border);
   background: var(--bg);
 }
 
@@ -415,7 +413,6 @@ button {
   gap: 4px;
   min-height: calc(var(--topbar) + var(--safe-top));
   padding: var(--safe-top) 8px 6px;
-  border-bottom: 1px solid var(--border);
   flex: none;
 }
 
@@ -650,7 +647,6 @@ button {
 .composer {
   flex: none;
   padding: 8px 16px calc(10px + var(--safe-bottom) + var(--keyboard, 0px));
-  border-top: 1px solid var(--border);
   background: var(--bg);
 }
 
@@ -801,7 +797,6 @@ button {
   gap: 10px;
   min-height: 60px;
   padding: 0 4px 0 12px;
-  border-bottom: 1px solid var(--border);
 }
 
 .file-row .row-main {
@@ -927,10 +922,6 @@ button {
   border-radius: 12px;
 }
 
-.task-row + .task-row {
-  border-top: 1px solid var(--border);
-}
-
 .task-main {
   flex: 1;
   min-width: 0;
@@ -1008,11 +999,6 @@ button {
   min-height: 56px;
   padding: 0 16px;
   text-align: left;
-  border-bottom: 1px solid var(--border);
-}
-
-.settings-card > :last-child {
-  border-bottom: 0;
 }
 
 .theme-row:hover,
