@@ -31,22 +31,34 @@ class Event:
         return "\n".join(lines) + "\n"
 
 
+def resync_event(*, session_id: str | None = None) -> Event:
+    """提示订阅者「你漏过事件了，请重新拉取状态」。"""
+    return Event(
+        id=0,
+        event_type="resync",
+        session_id=session_id,
+        project_id=None,
+        payload={"reason": "queue_overflow"},
+    )
+
+
 class EventBus:
     def __init__(self, *, max_queue: int = 1000):
         self.max_queue = max_queue
-        self._subscribers: set[asyncio.Queue[Event]] = set()
+        # 每个订阅者一个队列，值表示「该订阅者是否因为队列满丢过事件」。
+        self._subscribers: dict[asyncio.Queue[Event], bool] = {}
         self._counter = 0
         self._lock = asyncio.Lock()
 
     async def subscribe(self) -> asyncio.Queue[Event]:
         queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=self.max_queue)
         async with self._lock:
-            self._subscribers.add(queue)
+            self._subscribers[queue] = False
         return queue
 
     async def unsubscribe(self, queue: asyncio.Queue[Event]) -> None:
         async with self._lock:
-            self._subscribers.discard(queue)
+            self._subscribers.pop(queue, None)
 
     async def publish(
         self,
@@ -67,15 +79,33 @@ class EventBus:
             )
             subscribers = list(self._subscribers)
         for queue in subscribers:
-            try:
-                queue.put_nowait(event)
-            except asyncio.QueueFull:
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                try:
-                    queue.put_nowait(event)
-                except asyncio.QueueFull:
-                    pass
+            self._offer(queue, event)
 
+    def _offer(self, queue: asyncio.Queue[Event], event: Event) -> None:
+        """放入事件；队列满时丢最旧事件，并标记该订阅者需要重新同步。"""
+        try:
+            queue.put_nowait(event)
+            return
+        except asyncio.QueueFull:
+            pass
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            pass
+        if queue in self._subscribers:
+            self._subscribers[queue] = True
+
+    def needs_resync(self, queue: asyncio.Queue[Event]) -> bool:
+        return self._subscribers.get(queue, False)
+
+    async def take_resync(self, queue: asyncio.Queue[Event]) -> bool:
+        """读取并清除「需要重新同步」标记。"""
+        async with self._lock:
+            if not self._subscribers.get(queue, False):
+                return False
+            self._subscribers[queue] = False
+            return True

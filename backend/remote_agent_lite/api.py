@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .deps import AppState, current_auth, optional_auth, state
+from .events import resync_event
 from .server_info import collect_server_info
 from .storage import IMAGE_MEDIA_TYPES, StorageError
 
@@ -562,6 +563,8 @@ async def events(
                 except asyncio.TimeoutError:
                     yield ": heartbeat\n\n"
                     continue
+                if await app_state.events.take_resync(queue):
+                    yield resync_event(session_id=session_id).to_sse()
                 if event.session_id and session_id and event.session_id != session_id:
                     continue
                 yield event.to_sse()
