@@ -113,6 +113,26 @@ CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, created_
 CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_uploads_project ON upload_sessions(project_id, status);
+
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('once', 'interval')),
+    run_at TEXT,
+    interval_seconds INTEGER,
+    next_run_at TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    pinned_at TEXT,
+    last_run_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_tasks(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_session ON scheduled_tasks(session_id, next_run_at);
 """
 
 

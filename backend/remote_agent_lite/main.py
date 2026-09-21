@@ -18,6 +18,7 @@ from .deps import AppState, state
 from .events import EventBus
 from .projects import ProjectService
 from .queueing import JobQueue
+from .scheduled import ScheduledRunner, ScheduledTaskService
 from .security import AuthService
 from .sessions import SessionService
 from .storage import FileService, UploadService
@@ -64,6 +65,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         events = EventBus()
         codex = CodexClient(app_settings)
         queue = JobQueue(db, app_settings, projects, sessions, codex, events)
+        scheduled = ScheduledTaskService(db)
+        runner = ScheduledRunner(scheduled, queue)
         app.state.ral = AppState(
             settings=app_settings,
             db=db,
@@ -75,8 +78,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             events=events,
             codex=codex,
             queue=queue,
+            scheduled=scheduled,
         )
         await queue.start()
+        await runner.start()
         maintenance = asyncio.create_task(_maintenance_loop(app.state.ral))
         try:
             yield
@@ -84,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             maintenance.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await maintenance
+            await runner.stop()
             await queue.stop()
             await codex.close()
 

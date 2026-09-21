@@ -23,6 +23,23 @@ export interface Session {
   last_message?: string | null;
   last_message_status?: string | null;
   job_status?: JobStatus;
+  scheduled_pending?: number;
+}
+
+export interface ScheduledTask {
+  id: string;
+  session_id: string;
+  title: string;
+  prompt: string;
+  kind: 'once' | 'interval';
+  run_at?: string | null;
+  interval_seconds?: number | null;
+  next_run_at: string;
+  enabled: boolean;
+  pinned: boolean;
+  last_run_at?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Project {

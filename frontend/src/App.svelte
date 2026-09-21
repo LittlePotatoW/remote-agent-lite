@@ -5,30 +5,37 @@
   import ChatView from './components/ChatView.svelte';
   import FilesPanel from './components/FilesPanel.svelte';
   import Login from './components/Login.svelte';
+  import SchedulePage from './components/SchedulePage.svelte';
   import SettingsView from './components/SettingsView.svelte';
   import TreePanel from './components/TreePanel.svelte';
   import { ApiError, client, subscribeEvents, uploadFile } from './lib/api';
   import { applyTheme, readTheme } from './lib/theme';
   import { isImagePath, rawImageUrl } from './lib/media';
   import type { PendingImage } from './lib/image';
+  import { defaultRunAt } from './lib/schedule';
   import { swipeAxis, swipeKeepsOpen, swipeStartedAtEdge } from './lib/swipe';
   import type {
     FileEntry,
     MenuItem,
     Message,
     Project,
+    ScheduledTask,
     ServerInfo,
     Session,
     ThemeName
   } from './lib/types';
 
   type Panel = 'tree' | 'files' | null;
+  /** 手势正在拖动的那一层；'schedule' 是盖在最上面的整屏定时任务页。 */
+  type DragSide = 'tree' | 'files' | 'schedule';
   type Sheet =
     | { kind: 'newProject' }
-    | { kind: 'rename'; scope: 'project' | 'session'; id: string; value: string }
+    | { kind: 'rename'; scope: 'project' | 'session' | 'task'; id: string; value: string }
     | { kind: 'deleteProject'; project: Project }
     | { kind: 'deleteSession'; session: Session }
+    | { kind: 'deleteTask'; task: ScheduledTask }
     | { kind: 'deleteEntry'; entry: FileEntry }
+    | { kind: 'newTask'; session: Session }
     | { kind: 'password' };
 
   let booting = true;
@@ -52,7 +59,19 @@
   let panel: Panel = null;
   let pull = 0;
   let dragging = false;
-  let side: 'tree' | 'files' = 'tree';
+  let side: DragSide = 'tree';
+
+  // 定时任务页：整屏盖在列表之上，和主页同一个层级；左滑退回列表。
+  let scheduleSessionId = '';
+  let schedulePull = 0;
+  let scheduleTasks: ScheduledTask[] = [];
+  let scheduleLoading = false;
+
+  let taskPrompt = '';
+  let taskKind: 'once' | 'interval' = 'once';
+  let taskRunAt = '';
+  let taskIntervalValue = 6;
+  let taskIntervalUnit: 'hours' | 'days' = 'hours';
 
   let filePath = '';
   let entries: FileEntry[] = [];
@@ -85,6 +104,12 @@
 
   $: activeProject = projects.find((item) => item.id === activeProjectId) ?? null;
   $: activeSession = activeProject?.sessions.find((item) => item.id === activeSessionId) ?? null;
+  $: scheduleSession =
+    projects
+      .flatMap((project) => project.sessions)
+      .find((item) => item.id === scheduleSessionId) ?? null;
+  $: scheduleProject =
+    projects.find((item) => item.id === scheduleSession?.project_id) ?? activeProject;
   $: if (authed && activeSessionId && activeSessionId !== eventSessionId) {
     eventSessionId = activeSessionId;
     bindEvents(activeSessionId);
@@ -141,6 +166,7 @@
     if (project && activeSessionId && !project.sessions.some((item) => item.id === activeSessionId)) {
       activeSessionId = project.sessions[0]?.id ?? '';
     }
+    if (scheduleSessionId && !scheduleSession) scheduleSessionId = '';
   }
 
   async function refreshServerInfo() {
@@ -222,14 +248,19 @@
         }
         void refreshStatus();
         scheduleOverview();
+        refreshScheduleTasks(payload);
       },
       resync: () => {
         // 服务端提示订阅队列丢过事件，重新拉取权威状态
         void loadMessages();
         void refreshStatus();
         scheduleOverview();
+        void loadScheduleTasks();
       },
-      'session.status': () => scheduleOverview(),
+      'session.status': (payload) => {
+        scheduleOverview();
+        refreshScheduleTasks(payload);
+      },
       'files.changed': (payload) => {
         if (payload.project_id === activeProjectId) {
           void loadFiles(filePath);
@@ -361,6 +392,142 @@
     return Math.min(340, window.innerWidth * 0.86);
   }
 
+  /* ---------- 定时任务页 ---------- */
+
+  function schedulePageWidth() {
+    return window.innerWidth;
+  }
+
+  async function openSchedule(session: Session) {
+    scheduleSessionId = session.id;
+    scheduleTasks = [];
+    // 列表留在原地不关：定时任务页只是盖在它上面，左滑就滑回来
+    schedulePull = 0;
+    await loadScheduleTasks();
+    // 先渲染在屏幕外、下一帧再拉到整屏，滑入动画才有起点
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (scheduleSessionId === session.id) schedulePull = schedulePageWidth();
+      })
+    );
+  }
+
+  function closeSchedule() {
+    schedulePull = 0;
+    const closing = scheduleSessionId;
+    // 等滑出动画结束再卸载，不然会看到页面「跳」一下
+    window.setTimeout(() => {
+      if (scheduleSessionId === closing && schedulePull === 0) scheduleSessionId = '';
+    }, 260);
+  }
+
+  async function loadScheduleTasks() {
+    if (!scheduleSessionId) return;
+    scheduleLoading = true;
+    try {
+      const result = await client.scheduledTasks(scheduleSessionId);
+      scheduleTasks = result.tasks;
+    } catch (error) {
+      notify(messageOf(error), true);
+    } finally {
+      scheduleLoading = false;
+    }
+  }
+
+  /** 定时任务跑掉之后会被自动删除，事件到了就顺手刷新这一页。 */
+  function refreshScheduleTasks(payload: Record<string, unknown>) {
+    if (!scheduleSessionId) return;
+    if (payload.session_id && payload.session_id !== scheduleSessionId) return;
+    void loadScheduleTasks();
+  }
+
+  function openTaskMenu(task: ScheduledTask, event: MouseEvent) {
+    menu = {
+      anchor: anchorOf(event),
+      items: [
+        {
+          label: '重命名',
+          icon: 'pencil',
+          onSelect: () => (sheet = { kind: 'rename', scope: 'task', id: task.id, value: task.title })
+        },
+        {
+          label: task.pinned ? '取消置顶' : '置顶',
+          icon: 'pin',
+          onSelect: () => void setTaskPinned(task, !task.pinned)
+        },
+        {
+          label: '删除',
+          icon: 'trash',
+          danger: true,
+          onSelect: () => (sheet = { kind: 'deleteTask', task })
+        }
+      ]
+    };
+  }
+
+  async function setTaskPinned(task: ScheduledTask, pinned: boolean) {
+    try {
+      await client.updateScheduledTask(task.id, { pinned });
+      await loadScheduleTasks();
+    } catch (error) {
+      notify(messageOf(error), true);
+    }
+  }
+
+  function openNewTaskForm(session: Session) {
+    taskPrompt = '';
+    taskKind = 'once';
+    taskRunAt = defaultRunAt();
+    taskIntervalValue = 6;
+    taskIntervalUnit = 'hours';
+    sheetError = '';
+    sheet = { kind: 'newTask', session };
+  }
+
+  async function submitNewTask() {
+    if (!sheet || sheet.kind !== 'newTask') return;
+    const prompt = taskPrompt.trim();
+    if (!prompt) {
+      sheetError = '内容不能为空';
+      return;
+    }
+    sheetBusy = true;
+    sheetError = '';
+    try {
+      if (taskKind === 'once') {
+        const when = new Date(taskRunAt);
+        if (!taskRunAt || Number.isNaN(when.getTime())) {
+          sheetError = '请选择执行时间';
+          return;
+        }
+        if (when.getTime() < Date.now() - 60_000) {
+          sheetError = '这个时间已经过去了';
+          return;
+        }
+        // 表单里填的是服务器本地时间，原样发过去由服务端解释
+        await client.createScheduledTask(sheet.session.id, {
+          prompt,
+          kind: 'once',
+          run_at: taskRunAt
+        });
+      } else {
+        const amount = Math.max(1, Math.floor(taskIntervalValue || 1));
+        await client.createScheduledTask(sheet.session.id, {
+          prompt,
+          kind: 'interval',
+          interval_seconds: amount * (taskIntervalUnit === 'days' ? 86400 : 3600)
+        });
+      }
+      sheet = null;
+      await Promise.all([loadScheduleTasks(), refreshOverview()]);
+      notify('定时任务已创建');
+    } catch (error) {
+      sheetError = messageOf(error);
+    } finally {
+      sheetBusy = false;
+    }
+  }
+
   function openPanel(target: 'tree' | 'files') {
     side = target;
     panel = target;
@@ -382,8 +549,14 @@
     startY = event.clientY;
     startEdge = swipeStartedAtEdge(startX, window.innerWidth);
     axis = 'pending';
-    base = panel ? panelWidth() : 0;
-    side = panel ?? 'tree';
+    if (scheduleSessionId) {
+      // 定时任务页盖在最上面，这一拖只可能是在滑它
+      base = schedulePull;
+      side = 'schedule';
+    } else {
+      base = panel ? panelWidth() : 0;
+      side = panel ?? 'tree';
+    }
     moveTime = performance.now();
     prevDx = 0;
     lastDx = 0;
@@ -403,7 +576,7 @@
       }
       axis = 'horizontal';
       dragging = true;
-      if (!panel) side = dx > 0 ? 'tree' : 'files';
+      if (!scheduleSessionId && !panel) side = dx > 0 ? 'tree' : 'files';
     }
     if (axis !== 'horizontal') return;
     // 记录最近一段的位移速度，用来识别快速轻扫。
@@ -415,30 +588,45 @@
       prevDx = dx;
     }
     lastDx = dx;
-    const width = panelWidth();
-    let next: number;
-    if (panel === 'tree') next = base + dx;
-    else if (panel === 'files') next = base - dx;
-    else next = Math.abs(dx);
-    pull = Math.max(0, Math.min(width, next));
+    const width = side === 'schedule' ? schedulePageWidth() : panelWidth();
+    // tree / schedule 都在左边，往左拖是收起
+    const next = side === 'files' ? base - dx : base + dx;
+    const value = Math.max(0, Math.min(width, next));
+    if (side === 'schedule') schedulePull = value;
+    else pull = value;
   }
 
   function onPointerUp() {
     if (axis === 'horizontal') {
-      const width = panelWidth();
-      const keep = swipeKeepsOpen({ pull, base, panel, lastDx, recentVelocity, width });
-      if (keep) {
-        panel = side;
-        pull = width;
+      if (side === 'schedule') {
+        const width = schedulePageWidth();
+        const keep = swipeKeepsOpen({
+          pull: schedulePull,
+          base,
+          panel: 'schedule',
+          lastDx,
+          recentVelocity,
+          width
+        });
+        if (keep) schedulePull = width;
+        else closeSchedule();
+        dragEndedAt = Date.now();
       } else {
-        panel = null;
-        pull = 0;
+        const width = panelWidth();
+        const keep = swipeKeepsOpen({ pull, base, panel, lastDx, recentVelocity, width });
+        if (keep) {
+          panel = side === 'files' ? 'files' : 'tree';
+          pull = width;
+        } else {
+          panel = null;
+          pull = 0;
+        }
+        dragEndedAt = Date.now();
       }
-      dragEndedAt = Date.now();
     }
     axis = 'idle';
     dragging = false;
-    pull = panel ? panelWidth() : 0;
+    if (side !== 'schedule') pull = panel ? panelWidth() : 0;
     lastDx = 0;
     recentVelocity = 0;
   }
@@ -463,18 +651,21 @@
       if (lightbox) lightbox = null;
       else if (menu) menu = null;
       else if (sheet) sheet = null;
+      else if (scheduleSessionId) closeSchedule();
       else if (showSettings) showSettings = false;
       else if (panel) closePanel();
       return;
     }
     if (event.key === 'ArrowRight') {
+      if (scheduleSessionId) return;
       event.preventDefault();
       if (panel === 'files') closePanel();
       else openPanel('tree');
     }
     if (event.key === 'ArrowLeft') {
       event.preventDefault();
-      if (panel === 'tree') closePanel();
+      if (scheduleSessionId) closeSchedule();
+      else if (panel === 'tree') closePanel();
       else openPanel('files');
     }
   }
@@ -523,6 +714,11 @@
           label: '复制',
           icon: 'copy',
           onSelect: () => void duplicateSession(session)
+        },
+        {
+          label: '定时任务',
+          icon: 'clock',
+          onSelect: () => void openSchedule(session)
         },
         {
           label: session.pinned ? '取消置顶' : '置顶',
@@ -590,6 +786,9 @@
       if (sheet.scope === 'project') {
         await client.updateProject(sheet.id, { name: next });
         await refreshOverview();
+      } else if (sheet.scope === 'task') {
+        await client.updateScheduledTask(sheet.id, { title: next });
+        await loadScheduleTasks();
       } else {
         await client.updateSession(sheet.id, { title: next });
         await Promise.all([refreshOverview(), loadMessages()]);
@@ -637,6 +836,9 @@
         if (!activeProjectId) return;
         await client.deleteEntry(activeProjectId, sheet.entry.path);
         await loadFiles(filePath);
+      } else if (sheet.kind === 'deleteTask') {
+        await client.deleteScheduledTask(sheet.task.id);
+        await Promise.all([loadScheduleTasks(), refreshOverview()]);
       }
       sheet = null;
     } catch (error) {
@@ -788,6 +990,20 @@
       </main>
 
       <div class="scrim" class:visible={panel !== null} on:click={onScrimClick} role="presentation"></div>
+
+      {#if scheduleSessionId}
+        <section class="page-layer" style="--pull:{schedulePull}px">
+          <SchedulePage
+            project={scheduleProject}
+            session={scheduleSession}
+            tasks={scheduleTasks}
+            loading={scheduleLoading}
+            onClose={closeSchedule}
+            onNew={() => scheduleSession && openNewTaskForm(scheduleSession)}
+            onTaskMenu={openTaskMenu}
+          />
+        </section>
+      {/if}
     </div>
 
     {#if showSettings}
@@ -840,7 +1056,7 @@
     <BottomSheet title="重命名" onClose={() => (sheet = null)}>
       <form on:submit|preventDefault={() => void submitRename(renameValue)}>
         <label class="field">
-          <span>{sheet.scope === 'project' ? '项目名' : '对话标题'}</span>
+          <span>{sheet.scope === 'project' ? '项目名' : sheet.scope === 'task' ? '任务名' : '对话标题'}</span>
           <input bind:value={renameValue} maxlength="80" autocomplete="off" />
         </label>
         {#if sheetError}<p class="login-error" role="alert">{sheetError}</p>{/if}
@@ -892,6 +1108,73 @@
           ? '及其中全部文件'
           : ''}会被永久删除，无法恢复。
       </p>
+      {#if sheetError}<p class="login-error" role="alert">{sheetError}</p>{/if}
+      <div class="sheet-actions">
+        <button class="sheet-btn" type="button" on:click={() => (sheet = null)}>取消</button>
+        <button class="sheet-danger" type="button" disabled={sheetBusy} on:click={confirmDelete}>
+          永久删除
+        </button>
+      </div>
+    </BottomSheet>
+  {/if}
+
+  {#if sheet?.kind === 'newTask'}
+    <BottomSheet title="新建定时任务" onClose={() => (sheet = null)}>
+      <form on:submit|preventDefault={() => void submitNewTask()}>
+        <label class="field">
+          <span>内容</span>
+          <textarea
+            class="field-area"
+            rows="3"
+            placeholder="到点要发给 Codex 的话"
+            bind:value={taskPrompt}
+          ></textarea>
+        </label>
+        <div class="field">
+          <span>重复</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class:active={taskKind === 'once'}
+              on:click={() => (taskKind = 'once')}>一次性</button>
+            <button
+              type="button"
+              class:active={taskKind === 'interval'}
+              on:click={() => (taskKind = 'interval')}>每隔</button>
+          </div>
+        </div>
+        {#if taskKind === 'once'}
+          <label class="field">
+            <span>执行时间</span>
+            <input type="datetime-local" bind:value={taskRunAt} />
+          </label>
+        {:else}
+          <div class="field">
+            <span>间隔</span>
+            <div class="interval-row">
+              <input type="number" min="1" max="999" bind:value={taskIntervalValue} />
+              <select bind:value={taskIntervalUnit}>
+                <option value="hours">小时</option>
+                <option value="days">天</option>
+              </select>
+            </div>
+          </div>
+        {/if}
+        <p class="field-note">时间按服务器本地时间（GMT+8）算；到点它往这个对话里发一条消息，和手动发的一样。</p>
+        {#if sheetError}<p class="login-error" role="alert">{sheetError}</p>{/if}
+        <div class="sheet-actions">
+          <button class="sheet-btn" type="button" on:click={() => (sheet = null)}>取消</button>
+          <button class="btn-primary" type="submit" disabled={sheetBusy || !taskPrompt.trim()}>
+            创建
+          </button>
+        </div>
+      </form>
+    </BottomSheet>
+  {/if}
+
+  {#if sheet?.kind === 'deleteTask'}
+    <BottomSheet title="删除定时任务？" onClose={() => (sheet = null)}>
+      <p>「{sheet.task.title}」会被删除，到点不会再发消息。</p>
       {#if sheetError}<p class="login-error" role="alert">{sheetError}</p>{/if}
       <div class="sheet-actions">
         <button class="sheet-btn" type="button" on:click={() => (sheet = null)}>取消</button>

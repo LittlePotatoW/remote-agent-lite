@@ -42,8 +42,11 @@ export interface SwipeRelease {
   pull: number;
   /** 手势开始时面板已经打开的宽度（0 = 原本是关的）。 */
   base: number;
-  /** 当前展开的面板，没有则为 null。 */
-  panel: 'tree' | 'files' | null;
+  /**
+   * 当前展开的面板，没有则为 null。
+   * `schedule` 是盖在最上层的整屏定时任务页，方向和 `tree` 一样（都在左边）。
+   */
+  panel: 'tree' | 'files' | 'schedule' | null;
   /** 手势结束时的总横向位移，向右为正。 */
   lastDx: number;
   /** 最近一段的位移速度，px/ms。 */
@@ -54,7 +57,8 @@ export interface SwipeRelease {
 /** 松手后是否保持展开。 */
 export function swipeKeepsOpen(release: SwipeRelease): boolean {
   const { pull, base, panel, lastDx, recentVelocity, width } = release;
-  const opening = !base || (panel === 'tree' ? lastDx > 0 : lastDx < 0);
+  const fromLeft = panel === 'tree' || panel === 'schedule';
+  const opening = !base || (fromLeft ? lastDx > 0 : lastDx < 0);
   if (isFlick(lastDx, recentVelocity)) return opening;
   if (opening) return pull >= width * SWIPE_OPEN_RATIO;
   return pull > width * (1 - SWIPE_CLOSE_RATIO);

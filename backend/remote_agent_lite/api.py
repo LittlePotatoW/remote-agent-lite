@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
@@ -42,6 +42,20 @@ class SessionCreateBody(BaseModel):
 
 
 class SessionPatchBody(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    pinned: bool | None = None
+
+
+class ScheduledTaskBody(BaseModel):
+    """新建定时任务：一次性要 run_at，周期要 interval_seconds。"""
+
+    prompt: str = Field(min_length=1, max_length=200_000)
+    kind: Literal["once", "interval"] = "once"
+    run_at: str | None = Field(default=None, max_length=64)
+    interval_seconds: int | None = Field(default=None, ge=60, le=365 * 24 * 3600)
+
+
+class ScheduledTaskPatchBody(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=80)
     pinned: bool | None = None
 
@@ -432,6 +446,76 @@ async def session_status(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return await app_state.queue.status(session_id)
+
+
+@router.get("/sessions/{session_id}/scheduled-tasks")
+async def list_scheduled_tasks(
+    session_id: str, request: Request, _: Any = Depends(current_auth)
+):
+    app_state: AppState = state(request)
+    try:
+        await app_state.sessions.get(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"tasks": await app_state.scheduled.list_for_session(session_id)}
+
+
+@router.post("/sessions/{session_id}/scheduled-tasks")
+async def create_scheduled_task(
+    session_id: str,
+    body: ScheduledTaskBody,
+    request: Request,
+    _: Any = Depends(current_auth),
+):
+    app_state: AppState = state(request)
+    try:
+        await app_state.sessions.get(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        task = await app_state.scheduled.create(
+            session_id,
+            body.prompt,
+            kind=body.kind,
+            run_at=body.run_at,
+            interval_seconds=body.interval_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"task": task}
+
+
+@router.patch("/scheduled-tasks/{task_id}")
+async def update_scheduled_task(
+    task_id: str,
+    body: ScheduledTaskPatchBody,
+    request: Request,
+    _: Any = Depends(current_auth),
+):
+    app_state: AppState = state(request)
+    try:
+        task = await app_state.scheduled.get(task_id)
+        if body.title is not None:
+            task = await app_state.scheduled.rename(task_id, body.title)
+        if body.pinned is not None:
+            task = await app_state.scheduled.set_pinned(task_id, body.pinned)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"task": task}
+
+
+@router.delete("/scheduled-tasks/{task_id}")
+async def delete_scheduled_task(
+    task_id: str, request: Request, _: Any = Depends(current_auth)
+):
+    app_state: AppState = state(request)
+    try:
+        await app_state.scheduled.delete(task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
 
 
 @router.get("/projects/{project_id}/files")

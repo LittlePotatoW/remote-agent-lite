@@ -21,6 +21,8 @@ _SESSION_COLUMNS = """
      WHERE j.session_id = s.id AND j.status IN ('running', 'queued')
      ORDER BY CASE j.status WHEN 'running' THEN 0 ELSE 1 END, j.created_at
      LIMIT 1) AS job_status
+    ,(SELECT COUNT(*) FROM scheduled_tasks t
+      WHERE t.session_id = s.id AND t.enabled = 1) AS scheduled_pending
 """
 
 
@@ -245,4 +247,6 @@ class SessionService:
         data["pinned"] = bool(data.get("pinned"))
         if "unread_count" in data:
             data["unread_count"] = int(data["unread_count"] or 0)
+        if "scheduled_pending" in data:
+            data["scheduled_pending"] = int(data["scheduled_pending"] or 0)
         return data

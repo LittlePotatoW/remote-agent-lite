@@ -5,6 +5,7 @@ import type {
   Project,
   ServerInfo,
   Session,
+  ScheduledTask,
   ThemeName
 } from './types';
 
@@ -94,6 +95,27 @@ export const client = {
   },
   deleteSession(id: string) {
     return api<{ ok: boolean }>(`/api/sessions/${id}`, { method: 'DELETE' });
+  },
+  scheduledTasks(sessionId: string) {
+    return api<{ tasks: ScheduledTask[] }>(`/api/sessions/${sessionId}/scheduled-tasks`);
+  },
+  createScheduledTask(
+    sessionId: string,
+    body: { prompt: string; kind: 'once' | 'interval'; run_at?: string; interval_seconds?: number }
+  ) {
+    return api<{ task: ScheduledTask }>(`/api/sessions/${sessionId}/scheduled-tasks`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+  },
+  updateScheduledTask(id: string, patch: { title?: string; pinned?: boolean }) {
+    return api<{ task: ScheduledTask }>(`/api/scheduled-tasks/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch)
+    });
+  },
+  deleteScheduledTask(id: string) {
+    return api<{ ok: boolean }>(`/api/scheduled-tasks/${id}`, { method: 'DELETE' });
   },
   messages(sessionId: string, afterSeq?: number) {
     const query = afterSeq ? `?after_seq=${afterSeq}` : '';
