@@ -6,12 +6,13 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator, Callable, Sequence
 
 import websockets
 
 from .config import Settings
 from .context import render_global_guidance
+from .images import ChatImage
 from .utils import new_id
 
 
@@ -184,12 +185,37 @@ class CodexClient:
             raise CodexError("thread/start did not return a thread id")
         return str(new_thread_id), True
 
+    async def fork_thread(self, thread_id: str, *, cwd: Path) -> str:
+        """Fork an existing thread into a new one that keeps the same context."""
+
+        response = await self._request(
+            "thread/fork",
+            {
+                "threadId": thread_id,
+                "cwd": str(cwd),
+                "model": self.settings.codex_model or None,
+                "modelProvider": self.settings.codex_model_provider,
+                "sandbox": "danger-full-access",
+                "approvalPolicy": "never",
+                "developerInstructions": self._instructions(),
+                "config": {"web_search": self.settings.codex_web_search},
+            },
+            timeout=90,
+        )
+        result = response or {}
+        thread = result.get("thread") or {}
+        new_thread_id = thread.get("id") or result.get("threadId")
+        if not new_thread_id:
+            raise CodexError("thread/fork did not return a thread id")
+        return str(new_thread_id)
+
     async def start_turn(
         self,
         thread_id: str,
         prompt: str,
         *,
         cwd: Path,
+        images: Sequence[ChatImage] = (),
         client_user_message_id: str | None = None,
     ) -> TurnStream:
         stream = TurnStream(thread_id=thread_id)
@@ -203,7 +229,13 @@ class CodexClient:
                     "model": self.settings.codex_model or None,
                     "sandboxPolicy": {"type": "dangerFullAccess"},
                     "approvalPolicy": "never",
-                    "input": [{"type": "text", "text": prompt}],
+                    "input": [
+                        *(
+                            {"type": "image", "url": image.data_url, "detail": "auto"}
+                            for image in images
+                        ),
+                        {"type": "text", "text": prompt},
+                    ],
                     "clientUserMessageId": client_user_message_id or new_id(),
                 },
                 timeout=60,

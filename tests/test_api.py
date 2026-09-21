@@ -132,3 +132,108 @@ def test_image_raw_endpoint(settings) -> None:
         assert client.get(url, params={"path": "missing.png"}).status_code == 404
         assert client.get(url, params={"path": "../escape.png"}).status_code == 404
         assert client.get(f"/api/projects/{project['id']}/files/raw").status_code == 422
+
+
+def test_turn_accepts_inline_images_without_persisting_them(settings) -> None:
+    import base64
+
+    settings.ensure_dirs()
+    app = create_app(settings)
+    with TestClient(app) as client:
+        _login(client)
+        project = client.post("/api/projects", json={"name": "Chat images"}).json()["project"]
+        session = client.post(
+            f"/api/projects/{project['id']}/sessions", json={}
+        ).json()["session"]
+        url = f"/api/sessions/{session['id']}/turns"
+
+        assert client.post(url, json={"prompt": "   "}).status_code == 422
+        assert client.post(url, json={"prompt": ""}).status_code == 422
+
+        rejected = client.post(
+            url,
+            json={"prompt": "看图", "images": [{"data_url": "data:text/plain;base64,aGk="}]},
+        )
+        assert rejected.status_code == 400, rejected.text
+
+        data_url = "data:image/png;base64," + base64.b64encode(
+            b"\x89PNG\r\n\x1a\n" + b"body"
+        ).decode()
+        accepted = client.post(
+            url,
+            json={
+                "images": [{"name": "shot.png", "data_url": data_url}],
+            },
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["message"]["content"] == "请看这张图片。"
+
+        stored = client.get(f"/api/sessions/{session['id']}/messages").json()["messages"]
+        assert all("base64" not in (message["content"] or "") for message in stored)
+
+
+def test_duplicate_session_copies_transcript_into_the_same_project(settings) -> None:
+    settings.ensure_dirs()
+    app = create_app(settings)
+    with TestClient(app) as client:
+        _login(client)
+        project = client.post("/api/projects", json={"name": "Copy me"}).json()["project"]
+        session = client.post(
+            f"/api/projects/{project['id']}/sessions", json={}
+        ).json()["session"]
+        messages_url = f"/api/sessions/{session['id']}/messages"
+
+        assert client.post("/api/sessions/missing/duplicate").status_code == 404
+
+        transcript = client.get(messages_url).json()["messages"]
+        assert transcript == []
+
+        copy = client.post(f"/api/sessions/{session['id']}/duplicate")
+        assert copy.status_code == 200, copy.text
+        duplicated = copy.json()["session"]
+        assert duplicated["id"] != session["id"]
+        assert duplicated["project_id"] == project["id"]
+        assert duplicated["title"].endswith("副本")
+
+        sessions = client.get(f"/api/projects/{project['id']}/sessions").json()["sessions"]
+        assert {item["id"] for item in sessions} == {session["id"], duplicated["id"]}
+        # 原会话没有被改动
+        assert client.get(messages_url).json()["session"]["title"] == session["title"]
+
+
+def test_duplicate_session_copies_messages_and_skips_empty_assistant(settings) -> None:
+    import asyncio
+
+    from remote_agent_lite.db import Database
+    from remote_agent_lite.sessions import SessionService
+
+    settings.ensure_dirs()
+    app = create_app(settings)
+    with TestClient(app) as client:
+        _login(client)
+        project = client.post("/api/projects", json={"name": "Copy transcript"}).json()["project"]
+        session = client.post(
+            f"/api/projects/{project['id']}/sessions", json={}
+        ).json()["session"]
+
+        async def seed() -> None:
+            db = Database(settings.db_path)
+            await db.init()
+            service = SessionService(db)
+            await service.add_message(session["id"], "user", "第一个问题")
+            await service.add_message(session["id"], "assistant", "第一个回答")
+            await service.add_message(session["id"], "assistant", "", status="streaming")
+            await service.add_message(session["id"], "system", "已创建新的 Codex 会话上下文。")
+            await db.close()
+
+        asyncio.run(seed())
+
+        duplicated = client.post(f"/api/sessions/{session['id']}/duplicate").json()["session"]
+        copied = client.get(f"/api/sessions/{duplicated['id']}/messages").json()["messages"]
+        assert [message["content"] for message in copied] == [
+            "第一个问题",
+            "第一个回答",
+            "已创建新的 Codex 会话上下文。",
+        ]
+        assert all(message["status"] == "completed" for message in copied)
+        assert all(message["job_id"] is None for message in copied)

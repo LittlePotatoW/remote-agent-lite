@@ -8,7 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .codex import CodexError
 from .deps import AppState, current_auth, optional_auth, state
+from .images import ImageInputError, parse_images
 from .server_info import collect_server_info
 from .storage import IMAGE_MEDIA_TYPES, StorageError
 
@@ -43,8 +45,16 @@ class SessionPatchBody(BaseModel):
     pinned: bool | None = None
 
 
+class ImagePayload(BaseModel):
+    """One inline image sent with a turn. Never stored, never logged."""
+
+    name: str = Field(default="", max_length=240)
+    data_url: str = Field(min_length=1)
+
+
 class TurnBody(BaseModel):
-    prompt: str = Field(min_length=1, max_length=200_000)
+    prompt: str = Field(default="", max_length=200_000)
+    images: list[ImagePayload] = Field(default_factory=list)
 
 
 class UploadInitBody(BaseModel):
@@ -261,6 +271,41 @@ async def update_session(
     return {"session": session}
 
 
+@router.post("/sessions/{session_id}/duplicate")
+async def duplicate_session(
+    session_id: str, request: Request, _: Any = Depends(current_auth)
+):
+    """复制一个对话：同一个项目里的新会话，上下文来自 codex thread 分叉。"""
+
+    app_state: AppState = state(request)
+    try:
+        session = await app_state.sessions.get(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        project = await app_state.projects.get(session["project_id"])
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    forked_thread_id: str | None = None
+    if session.get("thread_id"):
+        project_dir = await app_state.projects.project_dir(project["id"])
+        try:
+            forked_thread_id = await app_state.codex.fork_thread(
+                session["thread_id"], cwd=project_dir
+            )
+        except CodexError as exc:
+            raise HTTPException(
+                status_code=503, detail=f"复制上下文失败：{exc}"
+            ) from exc
+
+    copy = await app_state.sessions.create(project["id"], f"{session['title']} 副本")
+    if forked_thread_id:
+        await app_state.sessions.set_thread(copy["id"], forked_thread_id)
+    await app_state.sessions.copy_messages(session_id, copy["id"])
+    return {"session": await app_state.sessions.get(copy["id"])}
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(
     session_id: str, request: Request, _: Any = Depends(current_auth)
@@ -316,8 +361,14 @@ async def create_turn(
     session_id: str, body: TurnBody, request: Request, _: Any = Depends(current_auth)
 ):
     app_state: AppState = state(request)
+    if not body.prompt.strip() and not body.images:
+        raise HTTPException(status_code=422, detail="消息内容和图片不能同时为空")
     try:
-        result = await app_state.queue.enqueue(session_id, body.prompt)
+        images = parse_images([image.model_dump() for image in body.images])
+    except ImageInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        result = await app_state.queue.enqueue(session_id, body.prompt, images)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
