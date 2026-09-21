@@ -1,0 +1,76 @@
+# remote-agent-lite git hook 配置
+#
+# 这些值由 .githooks/hooks-lib.sh 读取。标量项可以用同名环境变量临时覆盖，
+# 例如：RAL_MAX_BYTES=10485760 git commit（配置文件里用的是 := ，所以环境变量优先）
+# 数组项只能用本文件修改。
+
+# 单个文件允许进入索引的最大字节数（默认 1 MiB）。
+: "${RAL_MAX_BYTES:=1048576}"   # 环境变量优先
+
+# 1 = 禁止暂存符号链接（软链指向仓库外的内容时最危险）。
+: "${RAL_BLOCK_SYMLINKS:=1}"   # 环境变量优先
+
+# 1 = 禁止暂存 submodule / gitlink 条目。
+: "${RAL_BLOCK_GITLINKS:=1}"   # 环境变量优先
+
+# 1 = 禁止暂存被 .gitignore 忽略的文件（即 git add -f 强行加入的）。
+: "${RAL_BLOCK_IGNORED:=1}"   # 环境变量优先
+
+# 1 = 要求文本文件是合法 UTF-8（本仓库统一 UTF-8）。
+: "${RAL_REQUIRE_UTF8:=1}"   # 环境变量优先
+
+# 1 = post-index-change 自动把违规文件从索引里撤出；0 = 只警告不撤销。
+: "${RAL_AUTO_UNSTAGE:=1}"   # 环境变量优先
+
+# 二进制判定的采样字节数（与前 8 KiB 内是否出现 NUL 字节一致）。
+: "${RAL_SAMPLE_BYTES:=8192}"   # 环境变量优先
+
+# 例外清单：命中的路径跳过全部检查（大小 / 文本 / 黑名单）。
+: "${RAL_ALLOWLIST_FILE:=.githooks/allowlist.txt}"
+
+# ---------------------------------------------------------------------------
+# 提交前同步远端主干：检查 main 有没有新提交，有就 fetch 并合并进当前开发分支。
+# 由 pre-commit 在文件检查通过后执行，说明见 .githooks/README.md。
+# ---------------------------------------------------------------------------
+# 1 = 启用（默认）；0 = 完全不检查远端。
+: "${RAL_SYNC_ENABLED:=1}"
+# 远端名 / 远端主干分支名。
+: "${RAL_SYNC_REMOTE:=origin}"
+: "${RAL_SYNC_BRANCH:=main}"
+# fetch 超时秒数。超时或失败只警告，不拦提交。
+: "${RAL_SYNC_TIMEOUT:=25}"
+# merge = 自动合并主干（默认）；check = 只提示并拒绝本次提交。
+: "${RAL_SYNC_STRATEGY:=merge}"
+# 1 = 合并前打印将要带进来的提交（默认）。
+: "${RAL_SYNC_PRINT_COMMITS:=1}"
+# 可选：fetch 走的代理，例如 http://127.0.0.1:8899（直连 github.com 不通时用）。
+: "${RAL_GIT_PROXY:=}"
+
+# ---------------------------------------------------------------------------
+# 黑名单：命中即拒绝。大小写敏感，同时匹配「整个路径」和「路径中的每一段」，
+# 也就是说 node_modules 这种目录段会命中 frontend/node_modules/foo.js。
+# ---------------------------------------------------------------------------
+RAL_DENY_PATTERNS=(
+  # 机密与凭据
+  ".env" ".env.*" ".envrc" ".netrc" ".npmrc" ".pypirc" ".git-credentials"
+  "*.pem" "*.key" "*.p12" "*.pfx" "*.jks" "*.keystore" "*.ppk"
+  "id_rsa" "id_rsa.*" "id_ed25519" "id_ed25519.*" "id_ecdsa" "id_ecdsa.*" "id_dsa" "id_dsa.*"
+  "credentials*.json" "service-account*.json" "*.code-workspace"
+  # 本地状态 / 依赖 / 缓存 / 构建产物
+  ".venv" "venv" "node_modules" "__pycache__" ".pytest_cache" ".mypy_cache" ".ruff_cache"
+  ".tox" ".nox" ".eggs" "*.egg-info" "dist" "build" "var" ".cache"
+  "*.pyc" "*.pyo" "*.pyd" "*.log" "*.tmp" "*.bak" "*.orig" "*.rej" "*.swp" "*.swo"
+  ".DS_Store" "Thumbs.db" "desktop.ini"
+  # 数据库与本地数据
+  "*.sqlite" "*.sqlite3" "*.db" "*.db-journal" "*.dump"
+  # 压缩包 / 二进制 / 可执行
+  "*.zip" "*.tar" "*.tar.gz" "*.tgz" "*.gz" "*.bz2" "*.xz" "*.zst" "*.7z" "*.rar"
+  "*.exe" "*.dll" "*.so" "*.so.*" "*.dylib" "*.a" "*.o" "*.obj" "*.bin" "*.class" "*.jar"
+  "*.node" "*.wasm" "*.pyz" "*.iso" "*.img"
+  # 图片 / 音视频 / 字体
+  "*.png" "*.jpg" "*.jpeg" "*.gif" "*.webp" "*.bmp" "*.ico" "*.tif" "*.tiff" "*.heic"
+  "*.mp3" "*.mp4" "*.wav" "*.flac" "*.mov" "*.avi" "*.mkv" "*.webm" "*.ogg"
+  "*.woff" "*.woff2" "*.ttf" "*.otf" "*.eot"
+  # 设计稿 / 文档容器（zip 格式，本质是二进制）
+  "*.psd" "*.ai" "*.sketch" "*.docx" "*.xlsx" "*.pptx" "*.odt" "*.ods" "*.pdf"
+)

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# 提交前拦截：二进制、非文本、超大、以及不该进仓库的文件一律拒绝本次提交。
+# 安装：bash .githooks/install.sh
+set -o pipefail
+
+RAL_HOOKS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=.githooks/hooks-lib.sh
+. "$RAL_HOOKS_DIR/hooks-lib.sh"
+
+ral_scan_staged
+
+if [ "$(ral_violation_count)" -gt 0 ]; then
+  ral_stderr "⛔ 提交被 git hook 拒绝：暂存区里有不允许提交的文件"
+  ral_print_violations "以下文件不会进入这个提交："
+  ral_print_footer
+  ral_stderr ""
+  ral_stderr "  确需绕过（不建议）：git commit --no-verify"
+  exit 1
+fi
+
+# 文件检查通过后，确认当前分支有没有落后于远端主干（默认 origin/main）
+# shellcheck source=.githooks/sync-upstream.sh
+. "$RAL_HOOKS_DIR/sync-upstream.sh"
+ral_sync_main || exit 1
+
+exit 0
