@@ -101,7 +101,15 @@ export const client = {
   },
   createScheduledTask(
     sessionId: string,
-    body: { prompt: string; kind: 'once' | 'interval'; run_at?: string; interval_seconds?: number }
+    body: {
+      prompt: string;
+      kind: 'once' | 'daily' | 'weekly' | 'monthly';
+      month?: number;
+      day?: number;
+      weekday?: number;
+      hour: number;
+      minute: number;
+    }
   ) {
     return api<{ task: ScheduledTask }>(`/api/sessions/${sessionId}/scheduled-tasks`, {
       method: 'POST',

@@ -47,12 +47,15 @@ class SessionPatchBody(BaseModel):
 
 
 class ScheduledTaskBody(BaseModel):
-    """新建定时任务：一次性要 run_at，周期要 interval_seconds。"""
+    """新建定时任务：time 按服务器本地时区解释，年月日时分拆开传。"""
 
     prompt: str = Field(min_length=1, max_length=200_000)
-    kind: Literal["once", "interval"] = "once"
-    run_at: str | None = Field(default=None, max_length=64)
-    interval_seconds: int | None = Field(default=None, ge=60, le=365 * 24 * 3600)
+    kind: Literal["once", "daily", "weekly", "monthly"] = "once"
+    month: int | None = Field(default=None, ge=1, le=12)
+    day: int | None = Field(default=None, ge=1, le=31)
+    weekday: int | None = Field(default=None, ge=0, le=6)
+    hour: int = Field(default=9, ge=0, le=23)
+    minute: int = Field(default=0, ge=0, le=59)
 
 
 class ScheduledTaskPatchBody(BaseModel):
@@ -477,8 +480,11 @@ async def create_scheduled_task(
             session_id,
             body.prompt,
             kind=body.kind,
-            run_at=body.run_at,
-            interval_seconds=body.interval_seconds,
+            month=body.month,
+            day=body.day,
+            weekday=body.weekday,
+            hour=body.hour,
+            minute=body.minute,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

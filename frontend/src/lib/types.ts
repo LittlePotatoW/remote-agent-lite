@@ -31,9 +31,12 @@ export interface ScheduledTask {
   session_id: string;
   title: string;
   prompt: string;
-  kind: 'once' | 'interval';
-  run_at?: string | null;
-  interval_seconds?: number | null;
+  kind: 'once' | 'daily' | 'weekly' | 'monthly';
+  month?: number | null;
+  day?: number | null;
+  weekday?: number | null;
+  hour: number;
+  minute: number;
   next_run_at: string;
   enabled: boolean;
   pinned: boolean;

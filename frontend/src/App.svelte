@@ -8,11 +8,20 @@
   import SchedulePage from './components/SchedulePage.svelte';
   import SettingsView from './components/SettingsView.svelte';
   import TreePanel from './components/TreePanel.svelte';
+  import Wheel from './components/Wheel.svelte';
   import { ApiError, client, subscribeEvents, uploadFile } from './lib/api';
   import { applyTheme, readTheme } from './lib/theme';
   import { isImagePath, rawImageUrl } from './lib/media';
   import type { PendingImage } from './lib/image';
-  import { defaultRunAt } from './lib/schedule';
+  import {
+    HOUR_OPTIONS,
+    MINUTE_OPTIONS,
+    MONTH_OPTIONS,
+    WEEKDAYS,
+    dayOptions,
+    defaultLoop,
+    defaultOnce
+  } from './lib/schedule';
   import { swipeAxis, swipeKeepsOpen, swipeStartedAtEdge } from './lib/swipe';
   import type {
     FileEntry,
@@ -68,10 +77,16 @@
   let scheduleLoading = false;
 
   let taskPrompt = '';
-  let taskKind: 'once' | 'interval' = 'once';
-  let taskRunAt = '';
-  let taskIntervalValue = 6;
-  let taskIntervalUnit: 'hours' | 'days' = 'hours';
+  /** 表单第一层：定时（一次性）还是循环。 */
+  let taskRepeat: 'once' | 'loop' = 'once';
+  /** 表单第二层：循环的粒度。 */
+  let taskFreq: 'daily' | 'weekly' | 'monthly' = 'daily';
+  let taskMonth = 1;
+  let taskDay = 1;
+  let taskHour = 9;
+  let taskMinute = 0;
+  let taskWeekday = 5;
+  let taskMonthDays = dayOptions(1);
 
   let filePath = '';
   let entries: FileEntry[] = [];
@@ -476,13 +491,42 @@
 
   function openNewTaskForm(session: Session) {
     taskPrompt = '';
-    taskKind = 'once';
-    taskRunAt = defaultRunAt();
-    taskIntervalValue = 6;
-    taskIntervalUnit = 'hours';
+    taskRepeat = 'once';
+    taskFreq = 'daily';
+    applyOnceDefaults();
     sheetError = '';
     sheet = { kind: 'newTask', session };
   }
+
+  /** 「定时」那组滚轮的默认值：一小时后（取整到 5 分钟）。 */
+  function applyOnceDefaults() {
+    const once = defaultOnce();
+    taskMonth = once.month;
+    taskDay = once.day;
+    taskHour = once.hour;
+    taskMinute = once.minute;
+  }
+
+  /** 切到「循环」时把时间复位成 09:00，星期/日期跟着今天。 */
+  function applyLoopDefaults() {
+    const loop = defaultLoop();
+    taskHour = loop.hour;
+    taskMinute = loop.minute;
+    taskWeekday = loop.weekday;
+    taskDay = loop.day;
+    taskFreq = 'daily';
+  }
+
+  function pickRepeat(next: 'once' | 'loop') {
+    if (next === taskRepeat) return;
+    taskRepeat = next;
+    if (next === 'once') applyOnceDefaults();
+    else applyLoopDefaults();
+  }
+
+  /** 「日」滚轮的可选范围：定时跟着月份走，循环固定 1–31。 */
+  $: taskMonthDays = taskRepeat === 'once' ? dayOptions(taskMonth) : dayOptions(null);
+  $: if (taskDay > taskMonthDays.length) taskDay = taskMonthDays.length;
 
   async function submitNewTask() {
     if (!sheet || sheet.kind !== 'newTask') return;
@@ -494,30 +538,17 @@
     sheetBusy = true;
     sheetError = '';
     try {
-      if (taskKind === 'once') {
-        const when = new Date(taskRunAt);
-        if (!taskRunAt || Number.isNaN(when.getTime())) {
-          sheetError = '请选择执行时间';
-          return;
-        }
-        if (when.getTime() < Date.now() - 60_000) {
-          sheetError = '这个时间已经过去了';
-          return;
-        }
-        // 表单里填的是服务器本地时间，原样发过去由服务端解释
-        await client.createScheduledTask(sheet.session.id, {
-          prompt,
-          kind: 'once',
-          run_at: taskRunAt
-        });
-      } else {
-        const amount = Math.max(1, Math.floor(taskIntervalValue || 1));
-        await client.createScheduledTask(sheet.session.id, {
-          prompt,
-          kind: 'interval',
-          interval_seconds: amount * (taskIntervalUnit === 'days' ? 86400 : 3600)
-        });
-      }
+      // 表单里填的是服务器本地时间，原样发过去由服务端解释
+      const when = { hour: taskHour, minute: taskMinute };
+      const body =
+        taskRepeat === 'once'
+          ? { prompt, kind: 'once' as const, month: taskMonth, day: taskDay, ...when }
+          : taskFreq === 'weekly'
+            ? { prompt, kind: 'weekly' as const, weekday: taskWeekday, ...when }
+            : taskFreq === 'monthly'
+              ? { prompt, kind: 'monthly' as const, day: taskDay, ...when }
+              : { prompt, kind: 'daily' as const, ...when };
+      await client.createScheduledTask(sheet.session.id, body);
       sheet = null;
       await Promise.all([loadScheduleTasks(), refreshOverview()]);
       notify('定时任务已创建');
@@ -1134,31 +1165,64 @@
           <div class="segmented">
             <button
               type="button"
-              class:active={taskKind === 'once'}
-              on:click={() => (taskKind = 'once')}>一次性</button>
+              class:active={taskRepeat === 'once'}
+              on:click={() => pickRepeat('once')}>定时</button>
             <button
               type="button"
-              class:active={taskKind === 'interval'}
-              on:click={() => (taskKind = 'interval')}>每隔</button>
+              class:active={taskRepeat === 'loop'}
+              on:click={() => pickRepeat('loop')}>循环</button>
           </div>
         </div>
-        {#if taskKind === 'once'}
-          <label class="field">
-            <span>执行时间</span>
-            <input type="datetime-local" bind:value={taskRunAt} />
-          </label>
-        {:else}
+        {#if taskRepeat === 'loop'}
           <div class="field">
-            <span>间隔</span>
-            <div class="interval-row">
-              <input type="number" min="1" max="999" bind:value={taskIntervalValue} />
-              <select bind:value={taskIntervalUnit}>
-                <option value="hours">小时</option>
-                <option value="days">天</option>
-              </select>
+            <span>频率</span>
+            <div class="chips">
+              <button
+                type="button"
+                class="chip"
+                class:active={taskFreq === 'daily'}
+                on:click={() => (taskFreq = 'daily')}>每天</button>
+              <button
+                type="button"
+                class="chip"
+                class:active={taskFreq === 'weekly'}
+                on:click={() => (taskFreq = 'weekly')}>每周</button>
+              <button
+                type="button"
+                class="chip"
+                class:active={taskFreq === 'monthly'}
+                on:click={() => (taskFreq = 'monthly')}>每月</button>
             </div>
           </div>
         {/if}
+        {#if taskRepeat === 'loop' && taskFreq === 'weekly'}
+          <div class="field">
+            <span>星期</span>
+            <div class="chips">
+              {#each WEEKDAYS as day, index}
+                <button
+                  type="button"
+                  class="chip"
+                  class:active={taskWeekday === index}
+                  on:click={() => (taskWeekday = index)}>{day}</button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        <div class="field">
+          <span>{taskRepeat === 'loop' && taskFreq === 'monthly' ? '日期' : '时间'}</span>
+          <div class="wheel-row">
+            <div class="wheel-band" aria-hidden="true"></div>
+            {#if taskRepeat === 'once'}
+              <Wheel label="月" options={MONTH_OPTIONS} bind:value={taskMonth} />
+              <Wheel label="日" options={taskMonthDays} bind:value={taskDay} />
+            {:else if taskFreq === 'monthly'}
+              <Wheel label="日" options={taskMonthDays} bind:value={taskDay} />
+            {/if}
+            <Wheel label="时" options={HOUR_OPTIONS} bind:value={taskHour} />
+            <Wheel label="分" options={MINUTE_OPTIONS} bind:value={taskMinute} />
+          </div>
+        </div>
         {#if sheetError}<p class="login-error" role="alert">{sheetError}</p>{/if}
         <div class="sheet-actions">
           <button class="sheet-btn" type="button" on:click={() => (sheet = null)}>取消</button>
