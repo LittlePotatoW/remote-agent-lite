@@ -1126,7 +1126,6 @@
           <textarea
             class="field-area"
             rows="3"
-            placeholder="到点要发给 Codex 的话"
             bind:value={taskPrompt}
           ></textarea>
         </label>
@@ -1160,7 +1159,6 @@
             </div>
           </div>
         {/if}
-        <p class="field-note">时间按服务器本地时间（GMT+8）算；到点它往这个对话里发一条消息，和手动发的一样。</p>
         {#if sheetError}<p class="login-error" role="alert">{sheetError}</p>{/if}
         <div class="sheet-actions">
           <button class="sheet-btn" type="button" on:click={() => (sheet = null)}>取消</button>

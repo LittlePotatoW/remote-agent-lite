@@ -1168,13 +1168,6 @@ button {
   border-color: var(--accent);
 }
 
-.field-note {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-3);
-}
-
 .field-area {
   display: block;
   width: 100%;
