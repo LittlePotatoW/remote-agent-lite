@@ -39,7 +39,12 @@
     <div class="task-row">
       <div class="task-main">
         <span class="row-title">{task.title}</span>
-        <span class="task-when">{taskWhenLabel(task)}</span>
+        <span class="task-when">
+          {taskWhenLabel(task)}
+          {#if task.image_count > 0}
+            <span class="task-badge">{task.image_count} 张图</span>
+          {/if}
+        </span>
       </div>
       <div class="row-tail">
         {#if task.pinned}

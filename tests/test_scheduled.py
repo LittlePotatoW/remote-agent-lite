@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from remote_agent_lite.db import Database
+from remote_agent_lite.images import ChatImage
 from remote_agent_lite.main import create_app
 from remote_agent_lite.scheduled import (
     ScheduledRunner,
@@ -22,14 +23,21 @@ def _login(client: TestClient) -> None:
     assert client.post("/api/auth/setup", json={"password": "password123"}).status_code == 200
 
 
+#: 1x1 的透明 PNG，够通过魔数校验，也不用往仓库里塞图片文件。
+PNG_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
 class FakeQueue:
     """只记录「到点发了什么」，不碰真正的 codex。"""
 
     def __init__(self) -> None:
-        self.sent: list[tuple[str, str]] = []
+        self.sent: list[tuple[str, str, list[ChatImage]]] = []
 
-    async def enqueue(self, session_id: str, prompt: str) -> dict:
-        self.sent.append((session_id, prompt))
+    async def enqueue(self, session_id: str, prompt: str, images=None) -> dict:
+        self.sent.append((session_id, prompt, list(images or [])))
         return {"job_id": "job-fake"}
 
 
@@ -176,7 +184,8 @@ async def test_once_task_fires_and_disappears(settings) -> None:
     runner = ScheduledRunner(tasks, queue, tick_seconds=0.01)  # type: ignore[arg-type]
 
     assert await runner.run_due_once() == [task["id"]]
-    assert queue.sent == [(session["id"], "提醒我周五发周报")]
+    assert [(sid, text) for sid, text, _ in queue.sent] == [(session["id"], "提醒我周五发周报")]
+    assert queue.sent[0][2] == []
     assert await tasks.list_for_session(session["id"]) == []
     # 已经跑过的一次性任务不会再被扫出来
     assert await runner.run_due_once() == []
@@ -208,6 +217,84 @@ async def test_task_follows_session_deletion(settings) -> None:
     assert await tasks.list_for_session(session["id"]) != []
     await sessions.delete(session["id"])
     assert await tasks.list_for_session(session["id"]) == []
+
+
+def test_scheduled_task_with_images(settings) -> None:
+    settings.ensure_dirs()
+    app = create_app(settings)
+    with TestClient(app) as client:
+        _login(client)
+        project = client.post("/api/projects", json={"name": "P"}).json()["project"]
+        session = client.post(
+            f"/api/projects/{project['id']}/sessions", json={}
+        ).json()["session"]
+        url = f"/api/sessions/{session['id']}/scheduled-tasks"
+
+        # 纯图片任务：正文可以空着，和输入框里只发图一样
+        created = client.post(
+            url,
+            json={
+                "prompt": "",
+                "kind": "daily",
+                "hour": 9,
+                "minute": 0,
+                "images": [{"name": "shot.png", "data_url": PNG_DATA_URL}],
+            },
+        )
+        assert created.status_code == 200, created.text
+        task = created.json()["task"]
+        assert task["image_count"] == 1
+        assert task["title"] == "定时任务"
+
+        listed = client.get(url).json()["tasks"]
+        assert listed[0]["image_count"] == 1
+
+        # 正文和图片都没有 → 拒绝
+        assert client.post(url, json={"prompt": "", "kind": "daily"}).status_code == 400
+        # 不是图片的 base64 → 拒绝
+        bad = client.post(
+            url,
+            json={
+                "prompt": "x",
+                "kind": "daily",
+                "images": [{"name": "x.txt", "data_url": "data:text/plain;base64,aGVsbG8="}],
+            },
+        )
+        assert bad.status_code == 400
+
+        # 删任务时图片跟着级联删除，不留垃圾
+        assert client.delete(f"/api/scheduled-tasks/{task['id']}").status_code == 200
+        rows = client.get(url).json()["tasks"]
+        assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_images_are_stored_and_resent_every_time(settings) -> None:
+    db, _, tasks, session = await _setup_services(settings)
+    photo = ChatImage(name="shot.png", mime="image/png", data_url=PNG_DATA_URL, size=70)
+    task = await tasks.create(
+        session["id"], "", kind="daily", hour=9, minute=0, images=[photo]
+    )
+    assert task["image_count"] == 1
+    assert await tasks.images_for(task["id"]) == [photo]
+
+    queue = FakeQueue()
+    runner = ScheduledRunner(tasks, queue, tick_seconds=0.01)  # type: ignore[arg-type]
+    fired_at = utcnow()
+    await _make_due(tasks, task["id"], fired_at - timedelta(minutes=1))
+    assert await runner.run_due_once(now=fired_at) == [task["id"]]
+    assert queue.sent[0][2] == [photo]
+
+    # 循环任务每次到点都会把同一批图片再发一遍
+    again = utcnow() + timedelta(days=1)
+    await _make_due(tasks, task["id"], again - timedelta(minutes=1))
+    assert await runner.run_due_once(now=again) == [task["id"]]
+    assert len(queue.sent) == 2
+    assert queue.sent[1][2] == [photo]
+
+    # 删掉任务，图片行也跟着没了
+    await tasks.delete(task["id"])
+    assert await db.scalar("SELECT COUNT(*) FROM scheduled_task_images") == 0
 
 
 @pytest.mark.asyncio

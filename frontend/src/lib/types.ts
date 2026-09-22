@@ -37,6 +37,8 @@ export interface ScheduledTask {
   weekday?: number | null;
   hour: number;
   minute: number;
+  /** 任务随正文一起发出去的图片数量（图片本身只在新建表单里传）。 */
+  image_count: number;
   next_run_at: string;
   enabled: boolean;
   pinned: boolean;

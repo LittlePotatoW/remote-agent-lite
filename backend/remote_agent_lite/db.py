@@ -44,6 +44,23 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_tasks(enabled, next_ru
 CREATE INDEX IF NOT EXISTS idx_scheduled_session ON scheduled_tasks(session_id, next_run_at);
 """
 
+#: 定时任务随正文一起发的图片。和聊天里那种一次性图片不同，这些必须活到任务触发为止，
+#: 所以只能落库：任务删掉时跟着级联删除。
+SCHEDULED_IMAGES_DDL = """
+CREATE TABLE IF NOT EXISTS scheduled_task_images (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    data_url TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_images ON scheduled_task_images(task_id, position);
+"""
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -150,7 +167,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq)
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_uploads_project ON upload_sessions(project_id, status);
 
-""" + SCHEDULED_TASKS_DDL
+""" + SCHEDULED_TASKS_DDL + SCHEDULED_IMAGES_DDL
 
 
 class Database:
@@ -185,8 +202,10 @@ class Database:
             return
         await connection.execute("DROP INDEX IF EXISTS idx_scheduled_due")
         await connection.execute("DROP INDEX IF EXISTS idx_scheduled_session")
+        # 图片表是后加的，这时候一定是空的；先删掉，免得 RENAME 把它的外键指到旧表上
+        await connection.execute("DROP TABLE IF EXISTS scheduled_task_images")
         await connection.execute("ALTER TABLE scheduled_tasks RENAME TO scheduled_tasks_v1")
-        await connection.executescript(SCHEDULED_TASKS_DDL)
+        await connection.executescript(SCHEDULED_TASKS_DDL + SCHEDULED_IMAGES_DDL)
         now = iso(utcnow())
         kept = dropped = 0
         rows = await (await connection.execute("SELECT * FROM scheduled_tasks_v1")).fetchall()

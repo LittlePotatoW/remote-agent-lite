@@ -4,6 +4,7 @@
   import BottomSheet from './components/BottomSheet.svelte';
   import ChatView from './components/ChatView.svelte';
   import FilesPanel from './components/FilesPanel.svelte';
+  import Icon from './components/Icon.svelte';
   import Login from './components/Login.svelte';
   import SchedulePage from './components/SchedulePage.svelte';
   import SettingsView from './components/SettingsView.svelte';
@@ -12,7 +13,7 @@
   import { ApiError, client, subscribeEvents, uploadFile } from './lib/api';
   import { applyTheme, readTheme } from './lib/theme';
   import { isImagePath, rawImageUrl } from './lib/media';
-  import type { PendingImage } from './lib/image';
+  import { prepareImages, revokeImages, type PendingImage } from './lib/image';
   import {
     HOUR_OPTIONS,
     MINUTE_OPTIONS,
@@ -87,6 +88,10 @@
   let taskMinute = 0;
   let taskWeekday = 5;
   let taskMonthDays = dayOptions(1);
+  /** 这条定时任务要随正文一起发的图片（和输入框一样，只在本地预览）。 */
+  let taskImages: PendingImage[] = [];
+  let taskImageError = '';
+  let taskImageInput: HTMLInputElement;
 
   let filePath = '';
   let entries: FileEntry[] = [];
@@ -494,8 +499,34 @@
     taskRepeat = 'once';
     taskFreq = 'daily';
     applyOnceDefaults();
+    dropTaskImages();
     sheetError = '';
     sheet = { kind: 'newTask', session };
+  }
+
+  /** 关掉表单时把没发出去的图片对象释放掉。 */
+  function closeNewTaskForm() {
+    dropTaskImages();
+    sheetError = '';
+    sheet = null;
+  }
+
+  function dropTaskImages() {
+    revokeImages(taskImages);
+    taskImages = [];
+    taskImageError = '';
+  }
+
+  async function pickTaskImages(files: FileList) {
+    const { images, errors } = await prepareImages(files);
+    taskImages = [...taskImages, ...images];
+    taskImageError = errors.join('；');
+  }
+
+  function removeTaskImage(id: string) {
+    revokeImages(taskImages.filter((image) => image.id === id));
+    taskImages = taskImages.filter((image) => image.id !== id);
+    if (!taskImages.length) taskImageError = '';
   }
 
   /** 「定时」那组滚轮的默认值：一小时后（取整到 5 分钟）。 */
@@ -531,7 +562,7 @@
   async function submitNewTask() {
     if (!sheet || sheet.kind !== 'newTask') return;
     const prompt = taskPrompt.trim();
-    if (!prompt) {
+    if (!prompt && taskImages.length === 0) {
       sheetError = '内容不能为空';
       return;
     }
@@ -540,16 +571,17 @@
     try {
       // 表单里填的是服务器本地时间，原样发过去由服务端解释
       const when = { hour: taskHour, minute: taskMinute };
+      const photos = taskImages.map((image) => ({ name: image.name, data_url: image.dataUrl }));
       const body =
         taskRepeat === 'once'
-          ? { prompt, kind: 'once' as const, month: taskMonth, day: taskDay, ...when }
+          ? { prompt, kind: 'once' as const, month: taskMonth, day: taskDay, ...when, images: photos }
           : taskFreq === 'weekly'
-            ? { prompt, kind: 'weekly' as const, weekday: taskWeekday, ...when }
+            ? { prompt, kind: 'weekly' as const, weekday: taskWeekday, ...when, images: photos }
             : taskFreq === 'monthly'
-              ? { prompt, kind: 'monthly' as const, day: taskDay, ...when }
-              : { prompt, kind: 'daily' as const, ...when };
+              ? { prompt, kind: 'monthly' as const, day: taskDay, ...when, images: photos }
+              : { prompt, kind: 'daily' as const, ...when, images: photos };
       await client.createScheduledTask(sheet.session.id, body);
-      sheet = null;
+      closeNewTaskForm();
       await Promise.all([loadScheduleTasks(), refreshOverview()]);
       notify('定时任务已创建');
     } catch (error) {
@@ -681,6 +713,7 @@
     if (event.key === 'Escape') {
       if (lightbox) lightbox = null;
       else if (menu) menu = null;
+      else if (sheet?.kind === 'newTask') closeNewTaskForm();
       else if (sheet) sheet = null;
       else if (scheduleSessionId) closeSchedule();
       else if (showSettings) showSettings = false;
@@ -1150,16 +1183,63 @@
   {/if}
 
   {#if sheet?.kind === 'newTask'}
-    <BottomSheet title="新建定时任务" onClose={() => (sheet = null)}>
+    <BottomSheet title="新建定时任务" onClose={closeNewTaskForm}>
       <form on:submit|preventDefault={() => void submitNewTask()}>
-        <label class="field">
+        <div class="field">
           <span>内容</span>
-          <textarea
-            class="field-area"
-            rows="3"
-            bind:value={taskPrompt}
-          ></textarea>
-        </label>
+          <div class="field-card">
+            {#if taskImages.length > 0}
+              <div class="pending-images">
+                {#each taskImages as image (image.id)}
+                  <div class="pending-image">
+                    <button
+                      class="pending-thumb"
+                      type="button"
+                      aria-label="预览 {image.name}"
+                      on:click={() => (lightbox = { src: image.previewUrl, alt: image.name })}
+                    >
+                      <img src={image.previewUrl} alt={image.name} />
+                    </button>
+                    <button
+                      class="pending-remove"
+                      type="button"
+                      aria-label="移除 {image.name}"
+                      on:click={() => removeTaskImage(image.id)}
+                    >
+                      <Icon name="close" size={11} stroke={2.2} />
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            <div class="field-card-row">
+              <button
+                class="attach-btn"
+                type="button"
+                aria-label="添加图片"
+                on:click={() => taskImageInput?.click()}
+              >
+                <Icon name="image" size={20} />
+              </button>
+              <textarea class="field-area" rows="3" bind:value={taskPrompt}></textarea>
+            </div>
+          </div>
+          <input
+            bind:this={taskImageInput}
+            type="file"
+            accept="image/*"
+            multiple
+            class="sr-only"
+            tabindex="-1"
+            aria-hidden="true"
+            on:change={(event) => {
+              const files = (event.currentTarget as HTMLInputElement).files;
+              if (files && files.length) void pickTaskImages(files);
+              if (taskImageInput) taskImageInput.value = '';
+            }}
+          />
+          {#if taskImageError}<p class="login-error" role="alert">{taskImageError}</p>{/if}
+        </div>
         <div class="field">
           <span>重复</span>
           <div class="segmented">
@@ -1225,8 +1305,12 @@
         </div>
         {#if sheetError}<p class="login-error" role="alert">{sheetError}</p>{/if}
         <div class="sheet-actions">
-          <button class="sheet-btn" type="button" on:click={() => (sheet = null)}>取消</button>
-          <button class="btn-primary" type="submit" disabled={sheetBusy || !taskPrompt.trim()}>
+          <button class="sheet-btn" type="button" on:click={closeNewTaskForm}>取消</button>
+          <button
+            class="btn-primary"
+            type="submit"
+            disabled={sheetBusy || (!taskPrompt.trim() && taskImages.length === 0)}
+          >
             创建
           </button>
         </div>

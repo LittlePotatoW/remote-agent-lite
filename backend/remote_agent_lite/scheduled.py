@@ -15,9 +15,10 @@ import asyncio
 import calendar
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Sequence
 
 from .db import Database
+from .images import ChatImage
 from .queueing import JobQueue
 from .utils import iso, new_id, utcnow
 
@@ -121,18 +122,45 @@ class ScheduledTaskService:
     async def list_for_session(self, session_id: str) -> list[dict[str, Any]]:
         rows = await self.db.fetchall(
             """
-            SELECT * FROM scheduled_tasks WHERE session_id = ?
-            ORDER BY pinned DESC, COALESCE(pinned_at, '') DESC, next_run_at ASC
+            SELECT t.*, (
+                SELECT COUNT(*) FROM scheduled_task_images i WHERE i.task_id = t.id
+            ) AS image_count
+            FROM scheduled_tasks t WHERE t.session_id = ?
+            ORDER BY t.pinned DESC, COALESCE(t.pinned_at, '') DESC, t.next_run_at ASC
             """,
             (session_id,),
         )
         return [self._row(row) for row in rows]
 
     async def get(self, task_id: str) -> dict[str, Any]:
-        row = await self.db.fetchone("SELECT * FROM scheduled_tasks WHERE id = ?", (task_id,))
+        row = await self.db.fetchone(
+            """
+            SELECT t.*, (
+                SELECT COUNT(*) FROM scheduled_task_images i WHERE i.task_id = t.id
+            ) AS image_count
+            FROM scheduled_tasks t WHERE t.id = ?
+            """,
+            (task_id,),
+        )
         if not row:
             raise FileNotFoundError("定时任务不存在")
         return self._row(row)
+
+    async def images_for(self, task_id: str) -> list[ChatImage]:
+        """取一条任务随正文要发的图片（到点发出去时用）。"""
+        rows = await self.db.fetchall(
+            "SELECT * FROM scheduled_task_images WHERE task_id = ? ORDER BY position",
+            (task_id,),
+        )
+        return [
+            ChatImage(
+                name=row["name"],
+                mime=row["mime"],
+                data_url=row["data_url"],
+                size=int(row["size"]),
+            )
+            for row in rows
+        ]
 
     async def create(
         self,
@@ -145,9 +173,11 @@ class ScheduledTaskService:
         weekday: int | None = None,
         hour: int = 9,
         minute: int = 0,
+        images: Sequence[ChatImage] | None = None,
     ) -> dict[str, Any]:
         text = (prompt or "").strip()
-        if not text:
+        photos = list(images or [])
+        if not text and not photos:
             raise ValueError("内容不能为空")
         if kind not in KINDS:
             raise ValueError("不支持的时间类型")
@@ -172,31 +202,51 @@ class ScheduledTaskService:
         )
         task_id = new_id()
         stamp = iso(now)
-        await self.db.execute(
-            """
-            INSERT INTO scheduled_tasks(
-                id, session_id, title, prompt, kind, month, day, weekday, hour,
-                minute, next_run_at, enabled, pinned, pinned_at, last_run_at,
-                created_at, updated_at
+        async with self.db.transaction() as connection:
+            await connection.execute(
+                """
+                INSERT INTO scheduled_tasks(
+                    id, session_id, title, prompt, kind, month, day, weekday, hour,
+                    minute, next_run_at, enabled, pinned, pinned_at, last_run_at,
+                    created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, NULL, ?, ?)
+                """,
+                (
+                    task_id,
+                    session_id,
+                    task_title(text),
+                    text,
+                    kind,
+                    month,
+                    day,
+                    weekday,
+                    hour,
+                    minute,
+                    scheduled_at,
+                    stamp,
+                    stamp,
+                ),
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, NULL, ?, ?)
-            """,
-            (
-                task_id,
-                session_id,
-                task_title(text),
-                text,
-                kind,
-                month,
-                day,
-                weekday,
-                hour,
-                minute,
-                scheduled_at,
-                stamp,
-                stamp,
-            ),
-        )
+            for index, image in enumerate(photos):
+                await connection.execute(
+                    """
+                    INSERT INTO scheduled_task_images(
+                        id, task_id, name, mime, data_url, size, position, created_at
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_id(),
+                        task_id,
+                        image.name,
+                        image.mime,
+                        image.data_url,
+                        image.size,
+                        index,
+                        stamp,
+                    ),
+                )
         return await self.get(task_id)
 
     async def rename(self, task_id: str, title: str) -> dict[str, Any]:
@@ -265,7 +315,7 @@ class ScheduledTaskService:
         data = dict(row)
         data["enabled"] = bool(data.get("enabled"))
         data["pinned"] = bool(data.get("pinned"))
-        for key in ("month", "day", "weekday", "hour", "minute"):
+        for key in ("month", "day", "weekday", "hour", "minute", "image_count"):
             if data.get(key) is not None:
                 data[key] = int(data[key])
         return data
@@ -315,7 +365,12 @@ class ScheduledRunner:
         handled: list[str] = []
         for task in await self.tasks.due(moment):
             try:
-                await self.queue.enqueue(task["session_id"], task["prompt"])
+                # 带图的任务和手动发图走同一条路：图片随这一轮一起交给 codex
+                await self.queue.enqueue(
+                    task["session_id"],
+                    task["prompt"],
+                    await self.tasks.images_for(task["id"]),
+                )
             except FileNotFoundError:
                 # 会话已经不在了，任务跟着清掉
                 await self.tasks.delete(task["id"])

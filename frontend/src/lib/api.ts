@@ -109,6 +109,7 @@ export const client = {
       weekday?: number;
       hour: number;
       minute: number;
+      images?: ChatImagePayload[];
     }
   ) {
     return api<{ task: ScheduledTask }>(`/api/sessions/${sessionId}/scheduled-tasks`, {
