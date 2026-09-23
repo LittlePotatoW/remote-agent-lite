@@ -1,14 +1,19 @@
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-node_modules/
-frontend/dist/
-var/
+# 仓库级忽略规则：对所有端生效（不带斜杠的规则会递归匹配所有子目录）。
+# 各端自己的语言 / 构建 / 运行规则写在各自的 .gitignore 里，例如 remote-agent-server/.gitignore。
+
+# 密钥：任何端都不要提交真实配置，模板文件（*.env.example）仍然可以入库
 .env
-*.log
+.env.*
+!.env.example
+
+# pytest 的临时根目录（--basetemp 指到仓库里时会生成）
+.pytest-tmp/
 
 # 只在本机生效、故意不入库的东西：
 # AGENTS.md 是 Codex 生成的说明文件（.githooks/ 现在随仓库一起跟踪）
 AGENTS.md
+
+# 编辑器 / 系统文件
+.DS_Store
+Thumbs.db
+*.swp

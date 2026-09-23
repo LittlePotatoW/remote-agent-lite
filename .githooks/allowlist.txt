@@ -7,4 +7,4 @@
 .env.sample
 .env.template
 *.env.example
-deploy/remote-agent-lite.env.example
+remote-agent-server/deploy/remote-agent-lite.env.example

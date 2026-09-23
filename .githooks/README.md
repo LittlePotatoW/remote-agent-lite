@@ -32,11 +32,11 @@ bash .githooks/run-tests.sh        # 自测：38 条用例（文件规则 + 主�
 | `symlink` | 索引模式 `120000`，符号链接 |
 | `submodule` | 索引模式 `160000`，submodule / gitlink |
 
-黑名单模式同时匹配「完整路径」「basename」和「路径中的每一段」，所以 `node_modules` 能命中 `frontend/node_modules/x.js`；`*` 会跨 `/`，`assets/*` 覆盖整个目录。
+黑名单模式同时匹配「完整路径」「basename」和「路径中的每一段」，所以 `node_modules` 能命中 `remote-agent-server/frontend/node_modules/x.js`；`*` 会跨 `/`，`assets/*` 覆盖整个目录。
 
 ## 例外
 
-- 路径写进 `.githooks/allowlist.txt`（每行一个 glob），即可跳过全部检查 —— 它本身在版本控制里，例外会进入代码评审。已预置 `.env.example` / `deploy/remote-agent-lite.env.example` 这类模板。
+- 路径写进 `.githooks/allowlist.txt`（每行一个 glob），即可跳过全部检查 —— 它本身在版本控制里，例外会进入代码评审。已预置 `.env.example` / `remote-agent-server/deploy/remote-agent-lite.env.example` 这类模板。
 - 临时放宽标量阈值：`RAL_MAX_BYTES=10485760 git commit`、`RAL_BLOCK_SYMLINKS=0 git commit`。
 
 ## 可调项（`.githooks/config`，环境变量优先）

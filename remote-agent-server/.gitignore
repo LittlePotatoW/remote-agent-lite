@@ -1,0 +1,21 @@
+# remote-agent-server 专属忽略规则：只影响本目录及其子目录。
+# 仓库级规则（密钥、AGENTS.md、系统文件、.pytest-tmp）见根目录的 .gitignore。
+
+# --- Python 后端 ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+build/
+
+# --- Web 前端 ---
+node_modules/
+frontend/dist/
+
+# --- 运行时数据（RAL_DATA_DIR 默认会落在仓库内的 var/）---
+var/
+*.log
