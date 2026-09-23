@@ -22,21 +22,21 @@
 }
 
 :root[data-theme="blue"] {
-  --accent: #4d6bfe;
-  --accent-soft: #edf0ff;
-  --accent-text: #4d6bfe;
+  --accent: #4d6bfb;
+  --accent-soft: #edf0fc;
+  --accent-text: #4d6bfb;
 }
 
 :root[data-theme="mono"] {
-  --accent: #1a1a1a;
-  --accent-soft: #f0f0f2;
-  --accent-text: #1a1a1a;
+  --accent: #1a1a17;
+  --accent-soft: #f0f0f5;
+  --accent-text: #1a1a17;
 }
 
 :root[data-theme="orange"] {
-  --accent: #d97757;
-  --accent-soft: #fbf0ea;
-  --accent-text: #c2603f;
+  --accent: #d97754;
+  --accent-soft: #fbf0e7;
+  --accent-text: #c2603c;
 }
 
 * {
@@ -1026,15 +1026,15 @@ button {
 }
 
 .swatch.blue {
-  background: #4d6bfe;
+  background: #4d6bfb;
 }
 
 .swatch.mono {
-  background: #1a1a1a;
+  background: #1a1a17;
 }
 
 .swatch.orange {
-  background: #d97757;
+  background: #d97754;
 }
 
 .theme-label,
