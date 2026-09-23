@@ -1,6 +1,8 @@
 # remote-agent-lite
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-3da639?style=flat-square)](LICENSE)[![Status: early development](https://img.shields.io/badge/status-early%20development-orange?style=flat-square)](#roadmap) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](CONTRIBUTING.md)
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-3da639?style=flat-square)](LICENSE) [![Status: early development](https://img.shields.io/badge/status-early%20development-orange?style=flat-square)](#roadmap) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](CONTRIBUTING.md)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/) [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/) [![Svelte 5](https://img.shields.io/badge/Svelte-5-ff3e00?style=flat-square&logo=svelte&logoColor=white)](https://svelte.dev/) [![Node.js 18+](https://img.shields.io/badge/node-18%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/) [![Target: 2C2G VPS](https://img.shields.io/badge/target-2C2G%20VPS-555555?style=flat-square)](#introduction) [![Deploy: Ubuntu 24.04](https://img.shields.io/badge/deploy-Ubuntu%2024.04-e95420?style=flat-square&logo=ubuntu&logoColor=white)](remote-agent-server/deploy/README.md)
 
 ## Introduction
