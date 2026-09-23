@@ -1,18 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Sequence
 
 import aiosqlite
-
-from .utils import iso, parse_iso, utcnow
-
-
-logger = logging.getLogger(__name__)
-
 
 #: 定时任务表。时间按「月/日/星期/时/分」拆开存，没有年份：
 #:   once    一次性，month + day + hour + minute，过了就顺延到明年
@@ -187,65 +180,7 @@ class Database:
         async with self.connect() as connection:
             await self._prepare(connection)
             await connection.executescript(SCHEMA)
-            await self._migrate_scheduled_tasks(connection)
             await connection.commit()
-
-    async def _migrate_scheduled_tasks(self, connection: aiosqlite.Connection) -> None:
-        """把最早的「run_at / interval_seconds」表换成「月日时分」表。
-
-        旧表的列和 CHECK 约束都不一样，SQLite 改不了，只能重建。能对上时间的一次性
-        任务平移过来；每隔 N 小时的周期任务在新模型里没有对应物，直接丢弃。
-        """
-        cursor = await connection.execute("PRAGMA table_info(scheduled_tasks)")
-        columns = {row[1] for row in await cursor.fetchall()}
-        if not columns or "hour" in columns:
-            return
-        await connection.execute("DROP INDEX IF EXISTS idx_scheduled_due")
-        await connection.execute("DROP INDEX IF EXISTS idx_scheduled_session")
-        # 图片表是后加的，这时候一定是空的；先删掉，免得 RENAME 把它的外键指到旧表上
-        await connection.execute("DROP TABLE IF EXISTS scheduled_task_images")
-        await connection.execute("ALTER TABLE scheduled_tasks RENAME TO scheduled_tasks_v1")
-        await connection.executescript(SCHEDULED_TASKS_DDL + SCHEDULED_IMAGES_DDL)
-        now = iso(utcnow())
-        kept = dropped = 0
-        rows = await (await connection.execute("SELECT * FROM scheduled_tasks_v1")).fetchall()
-        for row in rows:
-            data = dict(row)
-            moment = parse_iso(data.get("run_at")) if data.get("kind") == "once" else None
-            if moment is None or iso(moment) <= now:
-                dropped += 1
-                continue
-            local = moment.astimezone()
-            await connection.execute(
-                """
-                INSERT INTO scheduled_tasks(
-                    id, session_id, title, prompt, kind, month, day, weekday,
-                    hour, minute, next_run_at, enabled, pinned, pinned_at,
-                    last_run_at, created_at, updated_at
-                )
-                VALUES(?, ?, ?, ?, 'once', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    data["id"],
-                    data["session_id"],
-                    data["title"],
-                    data["prompt"],
-                    local.month,
-                    local.day,
-                    local.hour,
-                    local.minute,
-                    data["next_run_at"],
-                    data.get("enabled", 1),
-                    data.get("pinned", 0),
-                    data.get("pinned_at"),
-                    data.get("last_run_at"),
-                    data["created_at"],
-                    data["updated_at"],
-                ),
-            )
-            kept += 1
-        await connection.execute("DROP TABLE scheduled_tasks_v1")
-        logger.warning("定时任务表已升级：保留 %d 条一次性任务，丢弃 %d 条旧周期任务", kept, dropped)
 
     async def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
         async with self.connect() as connection:
