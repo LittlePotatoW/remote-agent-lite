@@ -1,12 +1,65 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Sequence
 
 import aiosqlite
 
+from .utils import iso, parse_iso, utcnow
+
+
+logger = logging.getLogger(__name__)
+
+
+#: 定时任务表。时间按「月/日/星期/时/分」拆开存，没有年份：
+#:   once    一次性，month + day + hour + minute，过了就顺延到明年
+#:   daily   每天 hour:minute
+#:   weekly  每周 weekday 的 hour:minute（0=周日 … 6=周六）
+#:   monthly 每月 day 日的 hour:minute（当月没有这一天就跳过这个月）
+SCHEDULED_TASKS_DDL = """
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('once', 'daily', 'weekly', 'monthly')),
+    month INTEGER,
+    day INTEGER,
+    weekday INTEGER,
+    hour INTEGER NOT NULL,
+    minute INTEGER NOT NULL,
+    next_run_at TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    pinned_at TEXT,
+    last_run_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_tasks(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_session ON scheduled_tasks(session_id, next_run_at);
+"""
+
+#: 定时任务随正文一起发的图片。和聊天里那种一次性图片不同，这些必须活到任务触发为止，
+#: 所以只能落库：任务删掉时跟着级联删除。
+SCHEDULED_IMAGES_DDL = """
+CREATE TABLE IF NOT EXISTS scheduled_task_images (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    data_url TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_images ON scheduled_task_images(task_id, position);
+"""
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -114,26 +167,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq)
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_uploads_project ON upload_sessions(project_id, status);
 
-CREATE TABLE IF NOT EXISTS scheduled_tasks (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    title TEXT NOT NULL,
-    prompt TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK(kind IN ('once', 'interval')),
-    run_at TEXT,
-    interval_seconds INTEGER,
-    next_run_at TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    pinned INTEGER NOT NULL DEFAULT 0,
-    pinned_at TEXT,
-    last_run_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_tasks(enabled, next_run_at);
-CREATE INDEX IF NOT EXISTS idx_scheduled_session ON scheduled_tasks(session_id, next_run_at);
-"""
+""" + SCHEDULED_TASKS_DDL + SCHEDULED_IMAGES_DDL
 
 
 class Database:
@@ -153,7 +187,65 @@ class Database:
         async with self.connect() as connection:
             await self._prepare(connection)
             await connection.executescript(SCHEMA)
+            await self._migrate_scheduled_tasks(connection)
             await connection.commit()
+
+    async def _migrate_scheduled_tasks(self, connection: aiosqlite.Connection) -> None:
+        """把最早的「run_at / interval_seconds」表换成「月日时分」表。
+
+        旧表的列和 CHECK 约束都不一样，SQLite 改不了，只能重建。能对上时间的一次性
+        任务平移过来；每隔 N 小时的周期任务在新模型里没有对应物，直接丢弃。
+        """
+        cursor = await connection.execute("PRAGMA table_info(scheduled_tasks)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if not columns or "hour" in columns:
+            return
+        await connection.execute("DROP INDEX IF EXISTS idx_scheduled_due")
+        await connection.execute("DROP INDEX IF EXISTS idx_scheduled_session")
+        # 图片表是后加的，这时候一定是空的；先删掉，免得 RENAME 把它的外键指到旧表上
+        await connection.execute("DROP TABLE IF EXISTS scheduled_task_images")
+        await connection.execute("ALTER TABLE scheduled_tasks RENAME TO scheduled_tasks_v1")
+        await connection.executescript(SCHEDULED_TASKS_DDL + SCHEDULED_IMAGES_DDL)
+        now = iso(utcnow())
+        kept = dropped = 0
+        rows = await (await connection.execute("SELECT * FROM scheduled_tasks_v1")).fetchall()
+        for row in rows:
+            data = dict(row)
+            moment = parse_iso(data.get("run_at")) if data.get("kind") == "once" else None
+            if moment is None or iso(moment) <= now:
+                dropped += 1
+                continue
+            local = moment.astimezone()
+            await connection.execute(
+                """
+                INSERT INTO scheduled_tasks(
+                    id, session_id, title, prompt, kind, month, day, weekday,
+                    hour, minute, next_run_at, enabled, pinned, pinned_at,
+                    last_run_at, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, 'once', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    data["id"],
+                    data["session_id"],
+                    data["title"],
+                    data["prompt"],
+                    local.month,
+                    local.day,
+                    local.hour,
+                    local.minute,
+                    data["next_run_at"],
+                    data.get("enabled", 1),
+                    data.get("pinned", 0),
+                    data.get("pinned_at"),
+                    data.get("last_run_at"),
+                    data["created_at"],
+                    data["updated_at"],
+                ),
+            )
+            kept += 1
+        await connection.execute("DROP TABLE scheduled_tasks_v1")
+        logger.warning("定时任务表已升级：保留 %d 条一次性任务，丢弃 %d 条旧周期任务", kept, dropped)
 
     async def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
         async with self.connect() as connection:

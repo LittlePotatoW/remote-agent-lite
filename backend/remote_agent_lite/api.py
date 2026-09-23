@@ -46,25 +46,36 @@ class SessionPatchBody(BaseModel):
     pinned: bool | None = None
 
 
-class ScheduledTaskBody(BaseModel):
-    """新建定时任务：一次性要 run_at，周期要 interval_seconds。"""
+class ImagePayload(BaseModel):
+    """One inline image.
 
-    prompt: str = Field(min_length=1, max_length=200_000)
-    kind: Literal["once", "interval"] = "once"
-    run_at: str | None = Field(default=None, max_length=64)
-    interval_seconds: int | None = Field(default=None, ge=60, le=365 * 24 * 3600)
+    一轮对话用的图片只活在内存里（不落盘、不入库）；定时任务要等到点才发，
+    所以那些图片必须先存下来，见 `scheduled_task_images`。
+    """
+
+    name: str = Field(default="", max_length=240)
+    data_url: str = Field(min_length=1)
+
+
+class ScheduledTaskBody(BaseModel):
+    """新建定时任务：time 按服务器本地时区解释，年月日时分拆开传。
+
+    正文和图片至少要有一个，纯图片任务和输入框里只发图是一个意思。
+    """
+
+    prompt: str = Field(default="", max_length=200_000)
+    kind: Literal["once", "daily", "weekly", "monthly"] = "once"
+    month: int | None = Field(default=None, ge=1, le=12)
+    day: int | None = Field(default=None, ge=1, le=31)
+    weekday: int | None = Field(default=None, ge=0, le=6)
+    hour: int = Field(default=9, ge=0, le=23)
+    minute: int = Field(default=0, ge=0, le=59)
+    images: list[ImagePayload] = Field(default_factory=list)
 
 
 class ScheduledTaskPatchBody(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=80)
     pinned: bool | None = None
-
-
-class ImagePayload(BaseModel):
-    """One inline image sent with a turn. Never stored, never logged."""
-
-    name: str = Field(default="", max_length=240)
-    data_url: str = Field(min_length=1)
 
 
 class TurnBody(BaseModel):
@@ -473,12 +484,20 @@ async def create_scheduled_task(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     try:
+        images = parse_images([image.model_dump() for image in body.images])
+    except ImageInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
         task = await app_state.scheduled.create(
             session_id,
             body.prompt,
             kind=body.kind,
-            run_at=body.run_at,
-            interval_seconds=body.interval_seconds,
+            month=body.month,
+            day=body.day,
+            weekday=body.weekday,
+            hour=body.hour,
+            minute=body.minute,
+            images=images,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

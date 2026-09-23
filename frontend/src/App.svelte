@@ -4,15 +4,25 @@
   import BottomSheet from './components/BottomSheet.svelte';
   import ChatView from './components/ChatView.svelte';
   import FilesPanel from './components/FilesPanel.svelte';
+  import Icon from './components/Icon.svelte';
   import Login from './components/Login.svelte';
   import SchedulePage from './components/SchedulePage.svelte';
   import SettingsView from './components/SettingsView.svelte';
   import TreePanel from './components/TreePanel.svelte';
+  import Wheel from './components/Wheel.svelte';
   import { ApiError, client, subscribeEvents, uploadFile } from './lib/api';
   import { applyTheme, readTheme } from './lib/theme';
   import { isImagePath, rawImageUrl } from './lib/media';
-  import type { PendingImage } from './lib/image';
-  import { defaultRunAt } from './lib/schedule';
+  import { prepareImages, revokeImages, type PendingImage } from './lib/image';
+  import {
+    HOUR_OPTIONS,
+    MINUTE_OPTIONS,
+    MONTH_OPTIONS,
+    WEEKDAYS,
+    dayOptions,
+    defaultLoop,
+    defaultOnce
+  } from './lib/schedule';
   import { swipeAxis, swipeKeepsOpen, swipeStartedAtEdge } from './lib/swipe';
   import type {
     FileEntry,
@@ -68,10 +78,20 @@
   let scheduleLoading = false;
 
   let taskPrompt = '';
-  let taskKind: 'once' | 'interval' = 'once';
-  let taskRunAt = '';
-  let taskIntervalValue = 6;
-  let taskIntervalUnit: 'hours' | 'days' = 'hours';
+  /** 表单第一层：定时（一次性）还是循环。 */
+  let taskRepeat: 'once' | 'loop' = 'once';
+  /** 表单第二层：循环的粒度。 */
+  let taskFreq: 'daily' | 'weekly' | 'monthly' = 'daily';
+  let taskMonth = 1;
+  let taskDay = 1;
+  let taskHour = 9;
+  let taskMinute = 0;
+  let taskWeekday = 5;
+  let taskMonthDays = dayOptions(1);
+  /** 这条定时任务要随正文一起发的图片（和输入框一样，只在本地预览）。 */
+  let taskImages: PendingImage[] = [];
+  let taskImageError = '';
+  let taskImageInput: HTMLInputElement;
 
   let filePath = '';
   let entries: FileEntry[] = [];
@@ -476,49 +496,92 @@
 
   function openNewTaskForm(session: Session) {
     taskPrompt = '';
-    taskKind = 'once';
-    taskRunAt = defaultRunAt();
-    taskIntervalValue = 6;
-    taskIntervalUnit = 'hours';
+    taskRepeat = 'once';
+    taskFreq = 'daily';
+    applyOnceDefaults();
+    dropTaskImages();
     sheetError = '';
     sheet = { kind: 'newTask', session };
   }
 
+  /** 关掉表单时把没发出去的图片对象释放掉。 */
+  function closeNewTaskForm() {
+    dropTaskImages();
+    sheetError = '';
+    sheet = null;
+  }
+
+  function dropTaskImages() {
+    revokeImages(taskImages);
+    taskImages = [];
+    taskImageError = '';
+  }
+
+  async function pickTaskImages(files: FileList) {
+    const { images, errors } = await prepareImages(files);
+    taskImages = [...taskImages, ...images];
+    taskImageError = errors.join('；');
+  }
+
+  function removeTaskImage(id: string) {
+    revokeImages(taskImages.filter((image) => image.id === id));
+    taskImages = taskImages.filter((image) => image.id !== id);
+    if (!taskImages.length) taskImageError = '';
+  }
+
+  /** 「定时」那组滚轮的默认值：一小时后（取整到 5 分钟）。 */
+  function applyOnceDefaults() {
+    const once = defaultOnce();
+    taskMonth = once.month;
+    taskDay = once.day;
+    taskHour = once.hour;
+    taskMinute = once.minute;
+  }
+
+  /** 切到「循环」时把时间复位成 09:00，星期/日期跟着今天。 */
+  function applyLoopDefaults() {
+    const loop = defaultLoop();
+    taskHour = loop.hour;
+    taskMinute = loop.minute;
+    taskWeekday = loop.weekday;
+    taskDay = loop.day;
+    taskFreq = 'daily';
+  }
+
+  function pickRepeat(next: 'once' | 'loop') {
+    if (next === taskRepeat) return;
+    taskRepeat = next;
+    if (next === 'once') applyOnceDefaults();
+    else applyLoopDefaults();
+  }
+
+  /** 「日」滚轮的可选范围：定时跟着月份走，循环固定 1–31。 */
+  $: taskMonthDays = taskRepeat === 'once' ? dayOptions(taskMonth) : dayOptions(null);
+  $: if (taskDay > taskMonthDays.length) taskDay = taskMonthDays.length;
+
   async function submitNewTask() {
     if (!sheet || sheet.kind !== 'newTask') return;
     const prompt = taskPrompt.trim();
-    if (!prompt) {
+    if (!prompt && taskImages.length === 0) {
       sheetError = '内容不能为空';
       return;
     }
     sheetBusy = true;
     sheetError = '';
     try {
-      if (taskKind === 'once') {
-        const when = new Date(taskRunAt);
-        if (!taskRunAt || Number.isNaN(when.getTime())) {
-          sheetError = '请选择执行时间';
-          return;
-        }
-        if (when.getTime() < Date.now() - 60_000) {
-          sheetError = '这个时间已经过去了';
-          return;
-        }
-        // 表单里填的是服务器本地时间，原样发过去由服务端解释
-        await client.createScheduledTask(sheet.session.id, {
-          prompt,
-          kind: 'once',
-          run_at: taskRunAt
-        });
-      } else {
-        const amount = Math.max(1, Math.floor(taskIntervalValue || 1));
-        await client.createScheduledTask(sheet.session.id, {
-          prompt,
-          kind: 'interval',
-          interval_seconds: amount * (taskIntervalUnit === 'days' ? 86400 : 3600)
-        });
-      }
-      sheet = null;
+      // 表单里填的是服务器本地时间，原样发过去由服务端解释
+      const when = { hour: taskHour, minute: taskMinute };
+      const photos = taskImages.map((image) => ({ name: image.name, data_url: image.dataUrl }));
+      const body =
+        taskRepeat === 'once'
+          ? { prompt, kind: 'once' as const, month: taskMonth, day: taskDay, ...when, images: photos }
+          : taskFreq === 'weekly'
+            ? { prompt, kind: 'weekly' as const, weekday: taskWeekday, ...when, images: photos }
+            : taskFreq === 'monthly'
+              ? { prompt, kind: 'monthly' as const, day: taskDay, ...when, images: photos }
+              : { prompt, kind: 'daily' as const, ...when, images: photos };
+      await client.createScheduledTask(sheet.session.id, body);
+      closeNewTaskForm();
       await Promise.all([loadScheduleTasks(), refreshOverview()]);
       notify('定时任务已创建');
     } catch (error) {
@@ -650,6 +713,7 @@
     if (event.key === 'Escape') {
       if (lightbox) lightbox = null;
       else if (menu) menu = null;
+      else if (sheet?.kind === 'newTask') closeNewTaskForm();
       else if (sheet) sheet = null;
       else if (scheduleSessionId) closeSchedule();
       else if (showSettings) showSettings = false;
@@ -1119,52 +1183,134 @@
   {/if}
 
   {#if sheet?.kind === 'newTask'}
-    <BottomSheet title="新建定时任务" onClose={() => (sheet = null)}>
+    <BottomSheet title="新建定时任务" onClose={closeNewTaskForm}>
       <form on:submit|preventDefault={() => void submitNewTask()}>
-        <label class="field">
+        <div class="field">
           <span>内容</span>
-          <textarea
-            class="field-area"
-            rows="3"
-            placeholder="到点要发给 Codex 的话"
-            bind:value={taskPrompt}
-          ></textarea>
-        </label>
+          <div class="field-card">
+            {#if taskImages.length > 0}
+              <div class="pending-images">
+                {#each taskImages as image (image.id)}
+                  <div class="pending-image">
+                    <button
+                      class="pending-thumb"
+                      type="button"
+                      aria-label="预览 {image.name}"
+                      on:click={() => (lightbox = { src: image.previewUrl, alt: image.name })}
+                    >
+                      <img src={image.previewUrl} alt={image.name} />
+                    </button>
+                    <button
+                      class="pending-remove"
+                      type="button"
+                      aria-label="移除 {image.name}"
+                      on:click={() => removeTaskImage(image.id)}
+                    >
+                      <Icon name="close" size={11} stroke={2.2} />
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            <div class="field-card-row">
+              <button
+                class="attach-btn"
+                type="button"
+                aria-label="添加图片"
+                on:click={() => taskImageInput?.click()}
+              >
+                <Icon name="image" size={20} />
+              </button>
+              <textarea class="field-area" rows="3" bind:value={taskPrompt}></textarea>
+            </div>
+          </div>
+          <input
+            bind:this={taskImageInput}
+            type="file"
+            accept="image/*"
+            multiple
+            class="sr-only"
+            tabindex="-1"
+            aria-hidden="true"
+            on:change={(event) => {
+              const files = (event.currentTarget as HTMLInputElement).files;
+              if (files && files.length) void pickTaskImages(files);
+              if (taskImageInput) taskImageInput.value = '';
+            }}
+          />
+          {#if taskImageError}<p class="login-error" role="alert">{taskImageError}</p>{/if}
+        </div>
         <div class="field">
           <span>重复</span>
           <div class="segmented">
             <button
               type="button"
-              class:active={taskKind === 'once'}
-              on:click={() => (taskKind = 'once')}>一次性</button>
+              class:active={taskRepeat === 'once'}
+              on:click={() => pickRepeat('once')}>定时</button>
             <button
               type="button"
-              class:active={taskKind === 'interval'}
-              on:click={() => (taskKind = 'interval')}>每隔</button>
+              class:active={taskRepeat === 'loop'}
+              on:click={() => pickRepeat('loop')}>循环</button>
           </div>
         </div>
-        {#if taskKind === 'once'}
-          <label class="field">
-            <span>执行时间</span>
-            <input type="datetime-local" bind:value={taskRunAt} />
-          </label>
-        {:else}
+        {#if taskRepeat === 'loop'}
           <div class="field">
-            <span>间隔</span>
-            <div class="interval-row">
-              <input type="number" min="1" max="999" bind:value={taskIntervalValue} />
-              <select bind:value={taskIntervalUnit}>
-                <option value="hours">小时</option>
-                <option value="days">天</option>
-              </select>
+            <span>频率</span>
+            <div class="chips">
+              <button
+                type="button"
+                class="chip"
+                class:active={taskFreq === 'daily'}
+                on:click={() => (taskFreq = 'daily')}>每天</button>
+              <button
+                type="button"
+                class="chip"
+                class:active={taskFreq === 'weekly'}
+                on:click={() => (taskFreq = 'weekly')}>每周</button>
+              <button
+                type="button"
+                class="chip"
+                class:active={taskFreq === 'monthly'}
+                on:click={() => (taskFreq = 'monthly')}>每月</button>
             </div>
           </div>
         {/if}
-        <p class="field-note">时间按服务器本地时间（GMT+8）算；到点它往这个对话里发一条消息，和手动发的一样。</p>
+        {#if taskRepeat === 'loop' && taskFreq === 'weekly'}
+          <div class="field">
+            <span>星期</span>
+            <div class="chips">
+              {#each WEEKDAYS as day, index}
+                <button
+                  type="button"
+                  class="chip"
+                  class:active={taskWeekday === index}
+                  on:click={() => (taskWeekday = index)}>{day}</button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        <div class="field">
+          <span>{taskRepeat === 'loop' && taskFreq === 'monthly' ? '日期' : '时间'}</span>
+          <div class="wheel-row">
+            <div class="wheel-band" aria-hidden="true"></div>
+            {#if taskRepeat === 'once'}
+              <Wheel label="月" options={MONTH_OPTIONS} bind:value={taskMonth} />
+              <Wheel label="日" options={taskMonthDays} bind:value={taskDay} />
+            {:else if taskFreq === 'monthly'}
+              <Wheel label="日" options={taskMonthDays} bind:value={taskDay} />
+            {/if}
+            <Wheel label="时" options={HOUR_OPTIONS} bind:value={taskHour} />
+            <Wheel label="分" options={MINUTE_OPTIONS} bind:value={taskMinute} />
+          </div>
+        </div>
         {#if sheetError}<p class="login-error" role="alert">{sheetError}</p>{/if}
         <div class="sheet-actions">
-          <button class="sheet-btn" type="button" on:click={() => (sheet = null)}>取消</button>
-          <button class="btn-primary" type="submit" disabled={sheetBusy || !taskPrompt.trim()}>
+          <button class="sheet-btn" type="button" on:click={closeNewTaskForm}>取消</button>
+          <button
+            class="btn-primary"
+            type="submit"
+            disabled={sheetBusy || (!taskPrompt.trim() && taskImages.length === 0)}
+          >
             创建
           </button>
         </div>

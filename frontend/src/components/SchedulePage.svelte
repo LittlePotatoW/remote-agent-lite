@@ -31,7 +31,6 @@
   {:else if tasks.length === 0}
     <div class="empty-block">
       <strong>还没有定时任务</strong>
-      <p>到点它会往这个对话里发一条消息，和手动发出去的一样</p>
       <button class="btn-primary" type="button" on:click={onNew}>新建定时任务</button>
     </div>
   {/if}
@@ -40,7 +39,12 @@
     <div class="task-row">
       <div class="task-main">
         <span class="row-title">{task.title}</span>
-        <span class="task-when">{taskWhenLabel(task)}</span>
+        <span class="task-when">
+          {taskWhenLabel(task)}
+          {#if task.image_count > 0}
+            <span class="task-badge">{task.image_count} 张图</span>
+          {/if}
+        </span>
       </div>
       <div class="row-tail">
         {#if task.pinned}
