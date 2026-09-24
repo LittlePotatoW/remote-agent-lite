@@ -38,6 +38,25 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
+export type ScheduledTaskInput = {
+  prompt: string;
+  kind: 'once' | 'daily' | 'weekly' | 'monthly';
+  month?: number;
+  day?: number;
+  weekday?: number;
+  hour: number;
+  minute: number;
+  images?: ChatImagePayload[];
+};
+
+/** 定时任务里已经存下来的图片，编辑表单回填时用。 */
+export type StoredImage = {
+  name: string;
+  mime: string;
+  data_url: string;
+  size: number;
+};
+
 export const client = {
   authStatus() {
     return api<{ authenticated: boolean; setup_required: boolean }>('/api/auth/status');
@@ -99,23 +118,20 @@ export const client = {
   scheduledTasks(sessionId: string) {
     return api<{ tasks: ScheduledTask[] }>(`/api/sessions/${sessionId}/scheduled-tasks`);
   },
-  createScheduledTask(
-    sessionId: string,
-    body: {
-      prompt: string;
-      kind: 'once' | 'daily' | 'weekly' | 'monthly';
-      month?: number;
-      day?: number;
-      weekday?: number;
-      hour: number;
-      minute: number;
-      images?: ChatImagePayload[];
-    }
-  ) {
+  createScheduledTask(sessionId: string, body: ScheduledTaskInput) {
     return api<{ task: ScheduledTask }>(`/api/sessions/${sessionId}/scheduled-tasks`, {
       method: 'POST',
       body: JSON.stringify(body)
     });
+  },
+  updateScheduledTaskBody(id: string, body: ScheduledTaskInput) {
+    return api<{ task: ScheduledTask }>(`/api/scheduled-tasks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body)
+    });
+  },
+  scheduledTaskImages(id: string) {
+    return api<{ images: StoredImage[] }>(`/api/scheduled-tasks/${id}/images`);
   },
   updateScheduledTask(id: string, patch: { title?: string; pinned?: boolean }) {
     return api<{ task: ScheduledTask }>(`/api/scheduled-tasks/${id}`, {
@@ -162,6 +178,9 @@ export const client = {
   downloadUrl(projectId: string, path: string) {
     return `/api/projects/${projectId}/files/download?path=${encodeURIComponent(path)}`;
   },
+  archiveUrl(projectId: string, path: string) {
+    return `/api/projects/${projectId}/files/archive?path=${encodeURIComponent(path)}`;
+  },
   serverInfo() {
     return api<ServerInfo>('/api/server-info');
   }
@@ -175,15 +194,20 @@ interface UploadHandle {
   relative_path: string;
 }
 
-const resumeKey = (projectId: string, file: File) =>
-  `ral-upload:${projectId}:${file.name}:${file.size}`;
+const resumeKey = (projectId: string, file: File, relativePath: string) =>
+  `ral-upload:${projectId}:${relativePath || file.name}:${file.size}`;
 
+/**
+ * 上传一个文件。`relativePath` 是选文件夹/拖文件夹时浏览器给的相对路径
+ * （例如 `my-dir/sub/shot.png`），后端会照这个结构落在项目的 `uploads/` 下。
+ */
 export async function uploadFile(
   projectId: string,
   file: File,
-  onProgress: (sent: number, total: number) => void
+  onProgress: (sent: number, total: number) => void,
+  relativePath = ''
 ): Promise<void> {
-  let uploadId = localStorage.getItem(resumeKey(projectId, file)) || '';
+  let uploadId = localStorage.getItem(resumeKey(projectId, file, relativePath)) || '';
   let chunkSize = 5 * 1024 * 1024;
   let totalParts = Math.max(1, Math.ceil(file.size / chunkSize));
   let received = 0;
@@ -195,7 +219,7 @@ export async function uploadFile(
       totalParts = resumed.total_parts;
       received = resumed.received_parts;
     } catch {
-      localStorage.removeItem(resumeKey(projectId, file));
+      localStorage.removeItem(resumeKey(projectId, file, relativePath));
       uploadId = '';
     }
   }
@@ -203,13 +227,20 @@ export async function uploadFile(
   if (!uploadId) {
     const init = await api<UploadHandle & { upload_id: string }>(
       `/api/projects/${projectId}/uploads/init`,
-      { method: 'POST', body: JSON.stringify({ filename: file.name, size: file.size }) }
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          filename: file.name,
+          size: file.size,
+          relative_path: relativePath || undefined
+        })
+      }
     );
     uploadId = init.upload_id;
     chunkSize = init.chunk_size;
     totalParts = init.total_parts;
     received = init.received_parts;
-    localStorage.setItem(resumeKey(projectId, file), uploadId);
+    localStorage.setItem(resumeKey(projectId, file, relativePath), uploadId);
   }
 
   onProgress(Math.min(received * chunkSize, file.size), file.size);
@@ -238,7 +269,7 @@ export async function uploadFile(
     method: 'POST',
     body: JSON.stringify({})
   });
-  localStorage.removeItem(resumeKey(projectId, file));
+  localStorage.removeItem(resumeKey(projectId, file, relativePath));
 }
 
 export type EventHandler = (payload: Record<string, unknown>) => void;

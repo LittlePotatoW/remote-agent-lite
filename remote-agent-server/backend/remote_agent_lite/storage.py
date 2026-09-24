@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import os
 import shutil
+import time
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -9,10 +13,12 @@ from .config import Settings
 from .db import Database
 from .projects import ProjectService
 from .utils import (
+    free_bytes,
     hours_from_now,
     iso,
     new_id,
     resolve_within,
+    safe_relative_path,
     sanitize_filename,
     sha256_file,
     unique_path,
@@ -23,6 +29,21 @@ from .utils import (
 class StorageError(ValueError):
     pass
 
+
+#: 打进 zip 时直接「store」的扩展名：这些格式自己已经压过了，再 deflate 一遍只烧 CPU。
+ARCHIVE_STORED_SUFFIXES = frozenset(
+    {
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif",
+        ".mp4", ".m4v", ".mov", ".mkv", ".webm",
+        ".mp3", ".m4a", ".aac", ".ogg", ".opus",
+        ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar",
+        ".woff", ".woff2", ".docx", ".xlsx", ".pptx",
+    }
+)
+
+#: 打包用的临时 zip 前缀（放在 var/uploads/ 下，不进项目目录）。
+ARCHIVE_PREFIX = "archive-"
+ARCHIVE_MAX_AGE_SECONDS = 24 * 3600
 
 IMAGE_MEDIA_TYPES = {
     ".png": "image/png",
@@ -102,9 +123,113 @@ class FileService:
             raise StorageError("只支持 png / jpg / gif / webp / bmp 图片")
         return target
 
+    async def archive_entry(self, project_id: str, relative: str) -> tuple[Path, str]:
+        """把一个文件/文件夹打包成临时 zip，返回 (临时 zip 路径, 下载文件名)。
+
+        临时 zip 落在 `var/uploads/` 下，不进项目目录；`archive_entry` 之后由路由
+        在响应结束时删掉，所以服务器上不会留下副本。
+        """
+
+        root = await self.projects.project_dir(project_id)
+        if self._has_hidden_part(relative):
+            raise StorageError("这个条目由 remote-agent-lite 管理，不能打包")
+        source = resolve_within(root, relative, must_exist=True)
+        if source.is_symlink():
+            raise StorageError("不能打包符号链接")
+        # 打包期间临时 zip 会占磁盘，先按未压缩大小预检一次余量
+        if free_bytes(self.settings.projects_dir) - unpacked_size(source) < self.settings.disk_critical:
+            raise StorageError("服务器磁盘剩余空间不足")
+        self.settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+        archive = self.settings.uploads_dir / f"{ARCHIVE_PREFIX}{new_id()}.zip"
+        try:
+            await asyncio.to_thread(_write_archive, source, archive)
+        except Exception:
+            archive.unlink(missing_ok=True)
+            raise
+        name = source.name or "archive"
+        return archive, f"{name}.zip"
+
+    async def cleanup_stale_archives(self, max_age_seconds: int = ARCHIVE_MAX_AGE_SECONDS) -> int:
+        """清掉下载中断/进程被杀留下的临时 zip。"""
+
+        cutoff = time.time() - max_age_seconds
+        removed = 0
+        if not self.settings.uploads_dir.exists():
+            return 0
+        for item in self.settings.uploads_dir.glob(f"{ARCHIVE_PREFIX}*.zip"):
+            try:
+                if item.stat().st_mtime < cutoff:
+                    item.unlink()
+                    removed += 1
+            except OSError:
+                continue
+        return removed
+
     @classmethod
     def _has_hidden_part(cls, relative: str) -> bool:
         return any(part in cls.HIDDEN_NAMES for part in relative.replace("\\", "/").split("/"))
+
+
+def _add_to_archive(bundle: zipfile.ZipFile, path: Path, arcname: str) -> None:
+    """写入一个文件；已经压过的格式直接 store。"""
+
+    method = (
+        zipfile.ZIP_STORED
+        if path.suffix.lower() in ARCHIVE_STORED_SUFFIXES
+        else zipfile.ZIP_DEFLATED
+    )
+    bundle.write(path, arcname, compress_type=method)
+
+
+def _write_archive(source: Path, archive: Path) -> None:
+    """在线程里跑的同步打包：保留顶层名字、跳过受管目录与符号链接。"""
+
+    base = source.parent
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as bundle:
+        if source.is_file():
+            _add_to_archive(bundle, source, source.name)
+            return
+        # 先写一条目录记录：空文件夹也能得到一个合法的 zip
+        bundle.writestr(source.name + "/", b"")
+        for current, dirnames, filenames in os.walk(source):
+            dirnames[:] = sorted(
+                name
+                for name in dirnames
+                if name not in FileService.HIDDEN_NAMES
+                and not (Path(current) / name).is_symlink()
+            )
+            # 每条目录都写进去，空文件夹在 zip 里才不会消失
+            for name in dirnames:
+                bundle.writestr(
+                    (Path(current) / name).relative_to(base).as_posix() + "/", b""
+                )
+            for name in sorted(filenames):
+                item = Path(current) / name
+                if item.is_symlink() or not item.is_file():
+                    continue
+                _add_to_archive(bundle, item, item.relative_to(base).as_posix())
+
+
+def unpacked_size(path: Path) -> int:
+    """估算条目未压缩时的大小（跳过受管目录与符号链接）。"""
+
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    for current, dirnames, filenames in os.walk(path):
+        dirnames[:] = [name for name in dirnames if name not in FileService.HIDDEN_NAMES]
+        for name in filenames:
+            item = Path(current) / name
+            if item.is_symlink():
+                continue
+            try:
+                total += item.stat().st_size
+            except OSError:
+                continue
+    return total
 
 
 class UploadService:
@@ -114,7 +239,12 @@ class UploadService:
         self.settings = settings
 
     async def init(
-        self, project_id: str, filename: str, size: int, sha256: str | None = None
+        self,
+        project_id: str,
+        filename: str,
+        size: int,
+        sha256: str | None = None,
+        relative_path: str | None = None,
     ) -> dict[str, Any]:
         if size < 0 or size > self.settings.max_file_size:
             raise StorageError("文件超过服务器允许的大小")
@@ -122,11 +252,13 @@ class UploadService:
         if not ok:
             raise StorageError(reason)
         clean = sanitize_filename(filename)
+        # 选文件夹上传时浏览器会带上 webkitRelativePath，这里只保留目录部分
+        folder = self._target_folder(relative_path)
         upload_id = new_id()
         now = utcnow()
         chunk_size = self.settings.upload_chunk_size
         total_parts = max(1, (size + chunk_size - 1) // chunk_size)
-        relative = f"uploads/{clean}"
+        relative = f"uploads/{folder}/{clean}" if folder else f"uploads/{clean}"
         upload_dir = self.settings.uploads_dir / upload_id
         upload_dir.mkdir(parents=True, exist_ok=True)
         await self.db.execute(
@@ -210,9 +342,13 @@ class UploadService:
             )
         project = await self.projects.get(upload["project_id"])
         root = await self.projects.project_dir(project["id"])
-        uploads_dir = root / "uploads"
-        uploads_dir.mkdir(parents=True, exist_ok=True)
-        target = unique_path(uploads_dir, sanitize_filename(upload["filename"]))
+        root_resolved = root.resolve()
+        try:
+            target_dir = resolve_within(root, upload["relative_path"]).parent
+        except ValueError as exc:
+            raise StorageError("上传路径不合法") from exc
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = unique_path(target_dir, sanitize_filename(upload["filename"]))
         temp_target = target.with_name(target.name + ".uploading")
         part_dir = self.settings.uploads_dir / upload_id
         try:
@@ -234,7 +370,7 @@ class UploadService:
         await self.db.execute("DELETE FROM upload_sessions WHERE id = ?", (upload_id,))
         shutil.rmtree(part_dir, ignore_errors=True)
         return {
-            "path": target.relative_to(root).as_posix(),
+            "path": target.relative_to(root_resolved).as_posix(),
             "name": target.name,
             "size": target.stat().st_size,
             "sha256": actual_sha,
@@ -251,6 +387,27 @@ class UploadService:
                 "DELETE FROM upload_sessions WHERE id = ?", [(row["id"],) for row in rows]
             )
         return len(rows)
+
+    @staticmethod
+    def _target_folder(relative_path: str | None) -> str:
+        """把前端给的相对路径收成 `uploads/` 下的子目录（丢掉最后的文件名那一段）。
+
+        目录部分来自浏览器，不能直接信：绝对路径、`..` 和 `.git/`、`node_modules/`
+        这类由 remote-agent-lite 管理的目录一律拒绝。
+        """
+
+        if not relative_path:
+            return ""
+        try:
+            safe = safe_relative_path(relative_path, allow_empty=False)
+        except ValueError as exc:
+            raise StorageError("文件夹路径不合法") from exc
+        parts = safe.split("/")[:-1]
+        if any(part in FileService.HIDDEN_NAMES for part in parts):
+            raise StorageError("这个目录不允许上传")
+        if len("/".join(parts).encode("utf-8")) > 300:
+            raise StorageError("文件夹层级太深")
+        return "/".join(parts)
 
     async def _get_upload(self, upload_id: str) -> dict[str, Any]:
         row = await self.db.fetchone("SELECT * FROM upload_sessions WHERE id = ?", (upload_id,))

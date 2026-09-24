@@ -295,3 +295,96 @@ async def test_images_are_stored_and_resent_every_time(settings) -> None:
     # 删掉任务，图片行也跟着没了
     await tasks.delete(task["id"])
     assert await db.scalar("SELECT COUNT(*) FROM scheduled_task_images") == 0
+
+
+def test_scheduled_task_can_be_edited(settings) -> None:
+    settings.ensure_dirs()
+    app = create_app(settings)
+    with TestClient(app) as client:
+        _login(client)
+        project = client.post("/api/projects", json={"name": "P"}).json()["project"]
+        session = client.post(
+            f"/api/projects/{project['id']}/sessions", json={}
+        ).json()["session"]
+        url = f"/api/sessions/{session['id']}/scheduled-tasks"
+
+        created = client.post(
+            url,
+            json={"prompt": "原始内容", "kind": "once", "month": 8, "day": 15, "hour": 7},
+        )
+        assert created.status_code == 200, created.text
+        task = created.json()["task"]
+        assert task["image_count"] == 0
+
+        edited = client.put(
+            f"/api/scheduled-tasks/{task['id']}",
+            json={
+                "prompt": "改过之后的内容",
+                "kind": "weekly",
+                "weekday": 2,
+                "hour": 21,
+                "minute": 30,
+                "images": [{"name": "shot.png", "data_url": PNG_DATA_URL}],
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        updated = edited.json()["task"]
+        assert updated["prompt"] == "改过之后的内容"
+        assert updated["kind"] == "weekly"
+        assert updated["weekday"] == 2
+        assert (updated["hour"], updated["minute"]) == (21, 30)
+        assert updated["month"] is None and updated["day"] is None
+        assert updated["image_count"] == 1
+        # 标题属于另一个入口（重命名），编辑正文不会顺手改掉它
+        assert updated["title"] == task["title"]
+
+        # 编辑后的图片会存在库里，编辑表单可以取回来回填
+        photos = client.get(f"/api/scheduled-tasks/{task['id']}/images").json()["images"]
+        assert [photo["data_url"] for photo in photos] == [PNG_DATA_URL]
+
+        # 再编辑一次：图片是整体替换，不是追加
+        again = client.put(
+            f"/api/scheduled-tasks/{task['id']}",
+            json={"prompt": "第二次编辑", "kind": "daily", "hour": 8, "minute": 0},
+        )
+        assert again.status_code == 200, again.text
+        assert again.json()["task"]["image_count"] == 0
+        assert client.get(f"/api/scheduled-tasks/{task['id']}/images").json()["images"] == []
+
+        # 正文和图片同时为空 → 拒绝
+        empty = client.put(
+            f"/api/scheduled-tasks/{task['id']}", json={"prompt": "", "kind": "daily"}
+        )
+        assert empty.status_code == 400
+        # 非法时间类型 → 拒绝
+        bad_kind = client.put(
+            f"/api/scheduled-tasks/{task['id']}",
+            json={"prompt": "x", "kind": "interval", "hour": 8},
+        )
+        assert bad_kind.status_code == 422
+        # 任务不存在 → 404
+        assert (
+            client.put("/api/scheduled-tasks/missing", json={"prompt": "x", "kind": "daily"}).status_code
+            == 404
+        )
+        assert client.get("/api/scheduled-tasks/missing/images").status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_editing_recomputes_the_next_run(settings) -> None:
+    _, _, tasks, session = await _setup_services(settings)
+    task = await tasks.create(session["id"], "旧内容", kind="daily", hour=9, minute=0)
+    # 模拟「这条循环任务的上次时间点已经过去」
+    await _make_due(tasks, task["id"], utcnow() - timedelta(days=2))
+
+    edited = await tasks.update(
+        task["id"], "新内容", kind="daily", hour=6, minute=15
+    )
+    upcoming = datetime.fromisoformat(edited["next_run_at"].replace("Z", "+00:00"))
+    assert upcoming > utcnow()
+    assert (upcoming.astimezone(local_timezone()).hour, upcoming.astimezone(local_timezone()).minute) == (6, 15)
+    assert edited["prompt"] == "新内容"
+    assert edited["last_run_at"] is None
+
+    with pytest.raises(FileNotFoundError):
+        await tasks.update("missing", "x", kind="daily")

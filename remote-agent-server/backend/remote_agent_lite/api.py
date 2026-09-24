@@ -6,12 +6,13 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 
 from .codex import CodexError
 from .deps import AppState, current_auth, optional_auth, state
 from .events import resync_event
-from .images import ImageInputError, parse_images
+from .images import ChatImage, ImageInputError, parse_images
 from .server_info import collect_server_info
 from .storage import IMAGE_MEDIA_TYPES, StorageError
 
@@ -87,10 +88,23 @@ class UploadInitBody(BaseModel):
     filename: str = Field(min_length=1, max_length=240)
     size: int = Field(ge=0)
     sha256: str | None = None
+    #: 选文件夹上传时浏览器给的相对路径（例如 `my-dir/sub/shot.png`），只取目录部分。
+    relative_path: str | None = Field(default=None, max_length=400)
 
 
 class UploadCompleteBody(BaseModel):
     sha256: str | None = None
+
+
+def _image_payload(image: ChatImage) -> dict[str, Any]:
+    """把库里存的定时任务图片还原成前端表单能直接用的形状。"""
+
+    return {
+        "name": image.name,
+        "mime": image.mime,
+        "data_url": image.data_url,
+        "size": image.size,
+    }
 
 
 def _client_ip(request: Request) -> str:
@@ -504,6 +518,54 @@ async def create_scheduled_task(
     return {"task": task}
 
 
+@router.put("/scheduled-tasks/{task_id}")
+async def replace_scheduled_task(
+    task_id: str,
+    body: ScheduledTaskBody,
+    request: Request,
+    _: Any = Depends(current_auth),
+):
+    """编辑一条还没触发的定时任务：正文、图片、时间整体改掉，标题保持不变。"""
+
+    app_state: AppState = state(request)
+    try:
+        images = parse_images([image.model_dump() for image in body.images])
+    except ImageInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        task = await app_state.scheduled.update(
+            task_id,
+            body.prompt,
+            kind=body.kind,
+            month=body.month,
+            day=body.day,
+            weekday=body.weekday,
+            hour=body.hour,
+            minute=body.minute,
+            images=images,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"task": task}
+
+
+@router.get("/scheduled-tasks/{task_id}/images")
+async def scheduled_task_images(
+    task_id: str, request: Request, _: Any = Depends(current_auth)
+):
+    """编辑表单要用：把这条任务已经存下来的图片连同正文一起回填。"""
+
+    app_state: AppState = state(request)
+    try:
+        await app_state.scheduled.get(task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    images = await app_state.scheduled.images_for(task_id)
+    return {"images": [_image_payload(image) for image in images]}
+
+
 @router.patch("/scheduled-tasks/{task_id}")
 async def update_scheduled_task(
     task_id: str,
@@ -591,6 +653,30 @@ async def raw_image(
     )
 
 
+@router.get("/projects/{project_id}/files/archive")
+async def archive_folder(
+    project_id: str,
+    request: Request,
+    path: str = Query(min_length=1),
+    _: Any = Depends(current_auth),
+):
+    """把文件夹打包成 zip 直接下载；临时文件在响应结束时删掉，服务器上不留副本。"""
+
+    app_state: AppState = state(request)
+    try:
+        archive, filename = await app_state.files.archive_entry(project_id, path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="文件夹不存在") from exc
+    except (StorageError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(
+        archive,
+        media_type="application/zip",
+        filename=filename,
+        background=BackgroundTask(archive.unlink, missing_ok=True),
+    )
+
+
 @router.delete("/projects/{project_id}/files")
 async def delete_file(
     project_id: str,
@@ -622,7 +708,7 @@ async def upload_init(
     try:
         await app_state.projects.get(project_id)
         result = await app_state.uploads.init(
-            project_id, body.filename, body.size, body.sha256
+            project_id, body.filename, body.size, body.sha256, body.relative_path
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

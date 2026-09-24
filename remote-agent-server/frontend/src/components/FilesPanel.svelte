@@ -2,6 +2,7 @@
   import Icon from './Icon.svelte';
   import type { FileEntry, Project } from '../lib/types';
   import { formatBytes, formatTime } from '../lib/format';
+  import { collectDropped, type DroppedFile } from '../lib/drop';
 
   export let project: Project | null = null;
   export let path = '';
@@ -11,12 +12,32 @@
   export let onNavigate: (path: string) => void;
   export let onEntryMenu: (entry: FileEntry, event: MouseEvent) => void;
   export let onPick: (files: FileList) => void;
+  export let onDropped: (items: DroppedFile[]) => void;
   export let onOpen: (entry: FileEntry) => void;
   export let onClose: () => void;
 
   let input: HTMLInputElement;
+  let folderInput: HTMLInputElement;
 
   $: title = path ? path.split('/').filter(Boolean).pop()! : '文件';
+
+  /** 电脑端按住 Shift 点「上传文件」= 选文件夹；移动端没有 Shift，行为不变。 */
+  function pickFrom(event: MouseEvent) {
+    if (event.shiftKey && folderInput) folderInput.click();
+    else input?.click();
+  }
+
+  function handleDragOver(event: DragEvent) {
+    if (!project || !event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault();
+  }
+
+  async function handleDrop(event: DragEvent) {
+    if (!project) return;
+    event.preventDefault();
+    const items = await collectDropped(event.dataTransfer);
+    if (items.length) onDropped(items);
+  }
 </script>
 
 <header class="panel-header">
@@ -38,7 +59,12 @@
   </div>
 </header>
 
-<div class="panel-body">
+<div
+  class="panel-body"
+  role="presentation"
+  on:dragover={handleDragOver}
+  on:drop={handleDrop}
+>
   {#if !project}
     <div class="empty-block">
       <strong>还没有选择项目</strong>
@@ -93,7 +119,7 @@
 </div>
 
 <div class="panel-footer">
-  <button class="btn-primary" type="button" disabled={!project} on:click={() => input?.click()}>
+  <button class="btn-primary" type="button" disabled={!project} on:click={pickFrom}>
     <Icon name="upload" size={20} />
     上传文件
   </button>
@@ -108,6 +134,20 @@
       const files = (event.currentTarget as HTMLInputElement).files;
       if (files && files.length) onPick(files);
       if (input) input.value = '';
+    }}
+  />
+  <input
+    bind:this={folderInput}
+    type="file"
+    multiple
+    webkitdirectory
+    class="sr-only"
+    tabindex="-1"
+    aria-hidden="true"
+    on:change={(event) => {
+      const files = (event.currentTarget as HTMLInputElement).files;
+      if (files && files.length) onPick(files);
+      if (folderInput) folderInput.value = '';
     }}
   />
 </div>
