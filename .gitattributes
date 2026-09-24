@@ -7,4 +7,4 @@
 *.svelte text eol=lf
 *.ts text eol=lf
 *.css text eol=lf
-deploy/remote-agent-info text eol=lf
+remote-agent-server/deploy/remote-agent-info text eol=lf

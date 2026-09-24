@@ -6,7 +6,7 @@
 
 ```bash
 git clone <your-repo> remote-agent-lite
-cd remote-agent-lite
+cd remote-agent-lite/remote-agent-server
 bash deploy/install.sh
 ```
 

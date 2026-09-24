@@ -1,63 +1,27 @@
 # remote-agent-lite
 
-一个面向 2C2G 云服务器的轻量远程 Codex 工作台。
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-服务端常驻 `codex app-server`，通过 FastAPI 提供单管理员 Web 界面。手机和电脑使用同一个响应式页面，可以创建/删除项目、上传/下载文件、管理多个会话（重命名、置顶、复制、删除），并只接收当前打开会话的流式消息。
+[![License: MIT](https://img.shields.io/badge/license-MIT-3da639?style=flat-square)](LICENSE) [![Status: early development](https://img.shields.io/badge/status-early%20development-orange?style=flat-square)](#roadmap) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](CONTRIBUTING.md)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/) [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/) [![Svelte 5](https://img.shields.io/badge/Svelte-5-ff3e00?style=flat-square&logo=svelte&logoColor=white)](https://svelte.dev/) [![Node.js 18+](https://img.shields.io/badge/node-18%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/) [![Target: 2C2G VPS](https://img.shields.io/badge/target-2C2G%20VPS-555555?style=flat-square)](#introduction) [![Deploy: Ubuntu 24.04](https://img.shields.io/badge/deploy-Ubuntu%2024.04-e95420?style=flat-square&logo=ubuntu&logoColor=white)](remote-agent-server/deploy/README.md)
 
-## 设计边界
+## Introduction
 
-- 单用户、单管理员密码，HTTP 明文访问由部署者自行承担风险。
-- Codex 以专用普通用户运行，取消 Codex 自身沙箱，但没有 root、sudo、apt 或 systemd 管理权限。
-- 每个项目是服务器上的独立目录，项目之间靠目录、系统用户和全局规则隔离，不是强制安全沙箱。
-- 同一时间只运行一个 Codex turn，其他消息排队。
-- 文件内容不会主动推送，只推文件列表变更；下载时才传输内容。
-- 会话输入框可以直接附带图片（选择、粘贴、拖拽）：图片在浏览器里压成 data URL 随当轮消息发给模型，
-  不写入项目目录、也不进数据库。注意 Codex 自己会把当轮输入记进 `$CODEX_HOME/sessions` 的 rollout 文件，
-  所以服务器磁盘上仍会留有副本；图片也没有"历史回显"，刷新后只显示 `请看这张图片。` 这样的文字。
-- 不做版本管理：项目目录就是普通文件夹，改坏了要自己负责。
+remote-agent-lite is a lightweight, self-hosted suite that puts Codex on a small server — a 2C2G VPS is enough — and lets you drive that agent remotely from your phone or any other device. What it does today is close to what you get from a desktop agent client: projects, sessions and scheduled tasks.
 
-## 开发
+## Roadmap
 
-```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -r requirements-dev.txt
-pytest
-```
+- Abstract the agent interface so that other agents can be plugged in.
+- More cross-device integration, for example handing work off to a local agent seamlessly.
+- Better UI and lower runtime overhead.
 
-Windows PowerShell:
+Pull requests and issues are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt
-pytest
-```
+## Quick start
 
-前端：
+- Server development and deployment: [remote-agent-server/README.md](remote-agent-server/README.md)
+- Production deployment details: [remote-agent-server/deploy/README.md](remote-agent-server/deploy/README.md)
 
-```bash
-cd frontend
-npm install
-npm run build
-```
+## License
 
-本地开发可以分别启动后端和 Vite：
-
-```bash
-uvicorn remote_agent_lite.main:app --app-dir backend --reload --port 8080
-cd frontend && npm run dev
-```
-
-## 生产部署
-
-在全新 Ubuntu 24.04 上以 root 运行：
-
-```bash
-bash deploy/install.sh
-```
-
-安装脚本会创建专用用户、Python venv、systemd 服务、固定版本的 Codex、前端静态文件和访问配置，并提示输入 DSAPI 参数与管理员密码。
-
-详细配置见 [deploy/README.md](deploy/README.md)。
-
+Released under the MIT License — see [LICENSE](LICENSE).
