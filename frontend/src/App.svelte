@@ -14,6 +14,7 @@
   import { applyTheme, readTheme } from './lib/theme';
   import { isImagePath, rawImageUrl } from './lib/media';
   import { prepareImages, revokeImages, type PendingImage } from './lib/image';
+  import type { DroppedFile } from './lib/drop';
   import {
     HOUR_OPTIONS,
     MINUTE_OPTIONS,
@@ -386,22 +387,41 @@
     window.location.href = client.downloadUrl(activeProjectId, entry.path);
   }
 
+  /** 选文件夹上传时浏览器会在每个文件上带 webkitRelativePath，普通选择是空串。 */
+  function relativePathOf(file: File): string {
+    return (file as File & { webkitRelativePath?: string }).webkitRelativePath || '';
+  }
+
   async function pickFiles(files: FileList) {
-    if (!activeProjectId) return;
+    await uploadFiles(Array.from(files).map((file) => ({ file, path: relativePathOf(file) })));
+  }
+
+  async function uploadFiles(items: DroppedFile[]) {
+    if (!activeProjectId || items.length === 0) return;
     const projectId = activeProjectId;
-    const list = Array.from(files);
-    uploads = [...uploads, ...list.map((file) => ({ name: file.name, sent: 0, total: file.size }))];
-    for (const file of list) {
+    // 文件夹里的文件用相对路径当标签，进度列表一眼能看出是哪一棵树里的
+    const labelOf = (item: DroppedFile) => item.path || item.file.name;
+    uploads = [
+      ...uploads,
+      ...items.map((item) => ({ name: labelOf(item), sent: 0, total: item.file.size }))
+    ];
+    for (const item of items) {
+      const label = labelOf(item);
       try {
-        await uploadFile(projectId, file, (sent, total) => {
-          uploads = uploads.map((item) =>
-            item.name === file.name ? { name: item.name, sent, total } : item
-          );
-        });
+        await uploadFile(
+          projectId,
+          item.file,
+          (sent, total) => {
+            uploads = uploads.map((row) =>
+              row.name === label ? { name: row.name, sent, total } : row
+            );
+          },
+          item.path
+        );
       } catch (error) {
-        notify(`${file.name} 上传失败：${messageOf(error)}`, true);
+        notify(`${label} 上传失败：${messageOf(error)}`, true);
       } finally {
-        uploads = uploads.filter((item) => item.name !== file.name);
+        uploads = uploads.filter((row) => row.name !== label);
       }
     }
     await Promise.all([loadFiles(filePath), refreshOverview()]);
@@ -1090,6 +1110,7 @@
           onNavigate={(path) => void loadFiles(path)}
           onEntryMenu={openEntryMenu}
           onPick={(files) => void pickFiles(files)}
+          onDropped={(items) => void uploadFiles(items)}
           onOpen={openEntry}
           onClose={closePanel}
         />

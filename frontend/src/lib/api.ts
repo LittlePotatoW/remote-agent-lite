@@ -191,15 +191,20 @@ interface UploadHandle {
   relative_path: string;
 }
 
-const resumeKey = (projectId: string, file: File) =>
-  `ral-upload:${projectId}:${file.name}:${file.size}`;
+const resumeKey = (projectId: string, file: File, relativePath: string) =>
+  `ral-upload:${projectId}:${relativePath || file.name}:${file.size}`;
 
+/**
+ * 上传一个文件。`relativePath` 是选文件夹/拖文件夹时浏览器给的相对路径
+ * （例如 `my-dir/sub/shot.png`），后端会照这个结构落在项目的 `uploads/` 下。
+ */
 export async function uploadFile(
   projectId: string,
   file: File,
-  onProgress: (sent: number, total: number) => void
+  onProgress: (sent: number, total: number) => void,
+  relativePath = ''
 ): Promise<void> {
-  let uploadId = localStorage.getItem(resumeKey(projectId, file)) || '';
+  let uploadId = localStorage.getItem(resumeKey(projectId, file, relativePath)) || '';
   let chunkSize = 5 * 1024 * 1024;
   let totalParts = Math.max(1, Math.ceil(file.size / chunkSize));
   let received = 0;
@@ -211,7 +216,7 @@ export async function uploadFile(
       totalParts = resumed.total_parts;
       received = resumed.received_parts;
     } catch {
-      localStorage.removeItem(resumeKey(projectId, file));
+      localStorage.removeItem(resumeKey(projectId, file, relativePath));
       uploadId = '';
     }
   }
@@ -219,13 +224,20 @@ export async function uploadFile(
   if (!uploadId) {
     const init = await api<UploadHandle & { upload_id: string }>(
       `/api/projects/${projectId}/uploads/init`,
-      { method: 'POST', body: JSON.stringify({ filename: file.name, size: file.size }) }
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          filename: file.name,
+          size: file.size,
+          relative_path: relativePath || undefined
+        })
+      }
     );
     uploadId = init.upload_id;
     chunkSize = init.chunk_size;
     totalParts = init.total_parts;
     received = init.received_parts;
-    localStorage.setItem(resumeKey(projectId, file), uploadId);
+    localStorage.setItem(resumeKey(projectId, file, relativePath), uploadId);
   }
 
   onProgress(Math.min(received * chunkSize, file.size), file.size);
@@ -254,7 +266,7 @@ export async function uploadFile(
     method: 'POST',
     body: JSON.stringify({})
   });
-  localStorage.removeItem(resumeKey(projectId, file));
+  localStorage.removeItem(resumeKey(projectId, file, relativePath));
 }
 
 export type EventHandler = (payload: Record<string, unknown>) => void;

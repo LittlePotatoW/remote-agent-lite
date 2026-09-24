@@ -13,6 +13,7 @@ from .utils import (
     iso,
     new_id,
     resolve_within,
+    safe_relative_path,
     sanitize_filename,
     sha256_file,
     unique_path,
@@ -114,7 +115,12 @@ class UploadService:
         self.settings = settings
 
     async def init(
-        self, project_id: str, filename: str, size: int, sha256: str | None = None
+        self,
+        project_id: str,
+        filename: str,
+        size: int,
+        sha256: str | None = None,
+        relative_path: str | None = None,
     ) -> dict[str, Any]:
         if size < 0 or size > self.settings.max_file_size:
             raise StorageError("文件超过服务器允许的大小")
@@ -122,11 +128,13 @@ class UploadService:
         if not ok:
             raise StorageError(reason)
         clean = sanitize_filename(filename)
+        # 选文件夹上传时浏览器会带上 webkitRelativePath，这里只保留目录部分
+        folder = self._target_folder(relative_path)
         upload_id = new_id()
         now = utcnow()
         chunk_size = self.settings.upload_chunk_size
         total_parts = max(1, (size + chunk_size - 1) // chunk_size)
-        relative = f"uploads/{clean}"
+        relative = f"uploads/{folder}/{clean}" if folder else f"uploads/{clean}"
         upload_dir = self.settings.uploads_dir / upload_id
         upload_dir.mkdir(parents=True, exist_ok=True)
         await self.db.execute(
@@ -210,9 +218,13 @@ class UploadService:
             )
         project = await self.projects.get(upload["project_id"])
         root = await self.projects.project_dir(project["id"])
-        uploads_dir = root / "uploads"
-        uploads_dir.mkdir(parents=True, exist_ok=True)
-        target = unique_path(uploads_dir, sanitize_filename(upload["filename"]))
+        root_resolved = root.resolve()
+        try:
+            target_dir = resolve_within(root, upload["relative_path"]).parent
+        except ValueError as exc:
+            raise StorageError("上传路径不合法") from exc
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = unique_path(target_dir, sanitize_filename(upload["filename"]))
         temp_target = target.with_name(target.name + ".uploading")
         part_dir = self.settings.uploads_dir / upload_id
         try:
@@ -234,7 +246,7 @@ class UploadService:
         await self.db.execute("DELETE FROM upload_sessions WHERE id = ?", (upload_id,))
         shutil.rmtree(part_dir, ignore_errors=True)
         return {
-            "path": target.relative_to(root).as_posix(),
+            "path": target.relative_to(root_resolved).as_posix(),
             "name": target.name,
             "size": target.stat().st_size,
             "sha256": actual_sha,
@@ -251,6 +263,27 @@ class UploadService:
                 "DELETE FROM upload_sessions WHERE id = ?", [(row["id"],) for row in rows]
             )
         return len(rows)
+
+    @staticmethod
+    def _target_folder(relative_path: str | None) -> str:
+        """把前端给的相对路径收成 `uploads/` 下的子目录（丢掉最后的文件名那一段）。
+
+        目录部分来自浏览器，不能直接信：绝对路径、`..` 和 `.git/`、`node_modules/`
+        这类由 remote-agent-lite 管理的目录一律拒绝。
+        """
+
+        if not relative_path:
+            return ""
+        try:
+            safe = safe_relative_path(relative_path, allow_empty=False)
+        except ValueError as exc:
+            raise StorageError("文件夹路径不合法") from exc
+        parts = safe.split("/")[:-1]
+        if any(part in FileService.HIDDEN_NAMES for part in parts):
+            raise StorageError("这个目录不允许上传")
+        if len("/".join(parts).encode("utf-8")) > 300:
+            raise StorageError("文件夹层级太深")
+        return "/".join(parts)
 
     async def _get_upload(self, upload_id: str) -> dict[str, Any]:
         row = await self.db.fetchone("SELECT * FROM upload_sessions WHERE id = ?", (upload_id,))

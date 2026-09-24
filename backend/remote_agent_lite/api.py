@@ -87,6 +87,8 @@ class UploadInitBody(BaseModel):
     filename: str = Field(min_length=1, max_length=240)
     size: int = Field(ge=0)
     sha256: str | None = None
+    #: 选文件夹上传时浏览器给的相对路径（例如 `my-dir/sub/shot.png`），只取目录部分。
+    relative_path: str | None = Field(default=None, max_length=400)
 
 
 class UploadCompleteBody(BaseModel):
@@ -681,7 +683,7 @@ async def upload_init(
     try:
         await app_state.projects.get(project_id)
         result = await app_state.uploads.init(
-            project_id, body.filename, body.size, body.sha256
+            project_id, body.filename, body.size, body.sha256, body.relative_path
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
