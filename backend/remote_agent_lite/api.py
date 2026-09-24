@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from .codex import CodexError
 from .deps import AppState, current_auth, optional_auth, state
 from .events import resync_event
-from .images import ImageInputError, parse_images
+from .images import ChatImage, ImageInputError, parse_images
 from .server_info import collect_server_info
 from .storage import IMAGE_MEDIA_TYPES, StorageError
 
@@ -91,6 +91,17 @@ class UploadInitBody(BaseModel):
 
 class UploadCompleteBody(BaseModel):
     sha256: str | None = None
+
+
+def _image_payload(image: ChatImage) -> dict[str, Any]:
+    """把库里存的定时任务图片还原成前端表单能直接用的形状。"""
+
+    return {
+        "name": image.name,
+        "mime": image.mime,
+        "data_url": image.data_url,
+        "size": image.size,
+    }
 
 
 def _client_ip(request: Request) -> str:
@@ -502,6 +513,54 @@ async def create_scheduled_task(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"task": task}
+
+
+@router.put("/scheduled-tasks/{task_id}")
+async def replace_scheduled_task(
+    task_id: str,
+    body: ScheduledTaskBody,
+    request: Request,
+    _: Any = Depends(current_auth),
+):
+    """编辑一条还没触发的定时任务：正文、图片、时间整体改掉，标题保持不变。"""
+
+    app_state: AppState = state(request)
+    try:
+        images = parse_images([image.model_dump() for image in body.images])
+    except ImageInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        task = await app_state.scheduled.update(
+            task_id,
+            body.prompt,
+            kind=body.kind,
+            month=body.month,
+            day=body.day,
+            weekday=body.weekday,
+            hour=body.hour,
+            minute=body.minute,
+            images=images,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"task": task}
+
+
+@router.get("/scheduled-tasks/{task_id}/images")
+async def scheduled_task_images(
+    task_id: str, request: Request, _: Any = Depends(current_auth)
+):
+    """编辑表单要用：把这条任务已经存下来的图片连同正文一起回填。"""
+
+    app_state: AppState = state(request)
+    try:
+        await app_state.scheduled.get(task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    images = await app_state.scheduled.images_for(task_id)
+    return {"images": [_image_payload(image) for image in images]}
 
 
 @router.patch("/scheduled-tasks/{task_id}")

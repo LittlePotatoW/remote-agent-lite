@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import ActionMenu from './components/ActionMenu.svelte';
   import BottomSheet from './components/BottomSheet.svelte';
   import ChatView from './components/ChatView.svelte';
@@ -45,7 +45,7 @@
     | { kind: 'deleteSession'; session: Session }
     | { kind: 'deleteTask'; task: ScheduledTask }
     | { kind: 'deleteEntry'; entry: FileEntry }
-    | { kind: 'newTask'; session: Session }
+    | { kind: 'newTask'; session: Session; task?: ScheduledTask }
     | { kind: 'password' };
 
   let booting = true;
@@ -472,6 +472,11 @@
           onSelect: () => (sheet = { kind: 'rename', scope: 'task', id: task.id, value: task.title })
         },
         {
+          label: '编辑',
+          icon: 'compose',
+          onSelect: () => void openEditTask(task)
+        },
+        {
           label: task.pinned ? '取消置顶' : '置顶',
           icon: 'pin',
           onSelect: () => void setTaskPinned(task, !task.pinned)
@@ -495,7 +500,7 @@
     }
   }
 
-  function openNewTaskForm(session: Session) {
+  async function openNewTaskForm(session: Session) {
     taskPrompt = '';
     taskRepeat = 'once';
     taskFreq = 'daily';
@@ -503,6 +508,53 @@
     dropTaskImages();
     sheetError = '';
     sheet = { kind: 'newTask', session };
+    await tick();
+    growTaskPrompt();
+  }
+
+  /** 编辑一条还没触发的定时任务：复用新建表单，把内容和时间回填进去。 */
+  async function openEditTask(task: ScheduledTask) {
+    const session =
+      projects.flatMap((project) => project.sessions).find((item) => item.id === task.session_id) ??
+      null;
+    if (!session) {
+      notify('这条任务所属的对话已经不在了', true);
+      return;
+    }
+    try {
+      const { images } = await client.scheduledTaskImages(task.id);
+      taskPrompt = task.prompt;
+      if (task.kind === 'once') {
+        taskRepeat = 'once';
+        taskFreq = 'daily';
+        taskMonth = Number(task.month) || 1;
+        taskDay = Number(task.day) || 1;
+      } else {
+        taskRepeat = 'loop';
+        taskFreq = task.kind;
+        taskWeekday = Number(task.weekday) || 0;
+        taskDay = Number(task.day) || 1;
+      }
+      taskHour = Number(task.hour) || 0;
+      taskMinute = Number(task.minute) || 0;
+      dropTaskImages();
+      // 已经存下来的图片本身就是 data URL，直接拿来当预览用
+      taskImages = images.map((image, index) => ({
+        id: `stored-${task.id}-${index}`,
+        name: image.name || 'image.png',
+        previewUrl: image.data_url,
+        dataUrl: image.data_url,
+        size: Number(image.size) || 0,
+        width: 0,
+        height: 0
+      }));
+      sheetError = '';
+      sheet = { kind: 'newTask', session, task };
+      await tick();
+      growTaskPrompt();
+    } catch (error) {
+      notify(messageOf(error), true);
+    }
   }
 
   /** 关掉表单时把没发出去的图片对象释放掉。 */
@@ -569,6 +621,8 @@
 
   async function submitNewTask() {
     if (!sheet || sheet.kind !== 'newTask') return;
+    const editing = sheet.task;
+    const sessionId = sheet.session.id;
     const prompt = taskPrompt.trim();
     if (!prompt && taskImages.length === 0) {
       sheetError = '内容不能为空';
@@ -588,10 +642,11 @@
             : taskFreq === 'monthly'
               ? { prompt, kind: 'monthly' as const, day: taskDay, ...when, images: photos }
               : { prompt, kind: 'daily' as const, ...when, images: photos };
-      await client.createScheduledTask(sheet.session.id, body);
+      if (editing) await client.updateScheduledTaskBody(editing.id, body);
+      else await client.createScheduledTask(sessionId, body);
       closeNewTaskForm();
       await Promise.all([loadScheduleTasks(), refreshOverview()]);
-      notify('定时任务已创建');
+      notify(editing ? '定时任务已更新' : '定时任务已创建');
     } catch (error) {
       sheetError = messageOf(error);
     } finally {
@@ -1191,7 +1246,7 @@
   {/if}
 
   {#if sheet?.kind === 'newTask'}
-    <BottomSheet title="新建定时任务" onClose={closeNewTaskForm}>
+    <BottomSheet title={sheet.task ? '编辑定时任务' : '新建定时任务'} onClose={closeNewTaskForm}>
       <form on:submit|preventDefault={() => void submitNewTask()}>
         <div class="field">
           <span>内容</span>

@@ -38,6 +38,25 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
+export type ScheduledTaskInput = {
+  prompt: string;
+  kind: 'once' | 'daily' | 'weekly' | 'monthly';
+  month?: number;
+  day?: number;
+  weekday?: number;
+  hour: number;
+  minute: number;
+  images?: ChatImagePayload[];
+};
+
+/** 定时任务里已经存下来的图片，编辑表单回填时用。 */
+export type StoredImage = {
+  name: string;
+  mime: string;
+  data_url: string;
+  size: number;
+};
+
 export const client = {
   authStatus() {
     return api<{ authenticated: boolean; setup_required: boolean }>('/api/auth/status');
@@ -99,23 +118,20 @@ export const client = {
   scheduledTasks(sessionId: string) {
     return api<{ tasks: ScheduledTask[] }>(`/api/sessions/${sessionId}/scheduled-tasks`);
   },
-  createScheduledTask(
-    sessionId: string,
-    body: {
-      prompt: string;
-      kind: 'once' | 'daily' | 'weekly' | 'monthly';
-      month?: number;
-      day?: number;
-      weekday?: number;
-      hour: number;
-      minute: number;
-      images?: ChatImagePayload[];
-    }
-  ) {
+  createScheduledTask(sessionId: string, body: ScheduledTaskInput) {
     return api<{ task: ScheduledTask }>(`/api/sessions/${sessionId}/scheduled-tasks`, {
       method: 'POST',
       body: JSON.stringify(body)
     });
+  },
+  updateScheduledTaskBody(id: string, body: ScheduledTaskInput) {
+    return api<{ task: ScheduledTask }>(`/api/scheduled-tasks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body)
+    });
+  },
+  scheduledTaskImages(id: string) {
+    return api<{ images: StoredImage[] }>(`/api/scheduled-tasks/${id}/images`);
   },
   updateScheduledTask(id: string, patch: { title?: string; pinned?: boolean }) {
     return api<{ task: ScheduledTask }>(`/api/scheduled-tasks/${id}`, {

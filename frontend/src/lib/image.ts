@@ -176,7 +176,8 @@ export async function prepareImages(
 }
 
 export function revokeImage(image: PendingImage): void {
-  if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);
+  // 编辑定时任务回填的图片用的是 data URL（不是 blob），这里不需要也没法释放
+  if (image.previewUrl.startsWith('blob:')) URL.revokeObjectURL(image.previewUrl);
 }
 
 export function revokeImages(images: Iterable<PendingImage>): void {

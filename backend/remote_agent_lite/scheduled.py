@@ -115,6 +115,60 @@ def task_title(prompt: str) -> str:
     return text[:TITLE_CHARS] or "定时任务"
 
 
+def _clean_request(
+    prompt: str,
+    *,
+    kind: str,
+    month: int | None,
+    day: int | None,
+    weekday: int | None,
+    hour: int,
+    minute: int,
+    images: Sequence[ChatImage] | None,
+) -> tuple[str, list[ChatImage], dict[str, Any]]:
+    """校验一条任务的内容与时间，返回 (正文, 图片, 清洗过的时间字段)。"""
+
+    text = (prompt or "").strip()
+    photos = list(images or [])
+    if not text and not photos:
+        raise ValueError("内容不能为空")
+    if kind not in KINDS:
+        raise ValueError("不支持的时间类型")
+    when: dict[str, Any] = {
+        "kind": kind,
+        "month": _clean_int(month, 1, 12, "月份") if kind == "once" else None,
+        "day": _clean_int(day, 1, 31, "日期") if kind in ("once", "monthly") else None,
+        "weekday": _clean_int(weekday, 0, 6, "星期") if kind == "weekly" else None,
+        "hour": _clean_int(hour, 0, 23, "小时"),
+        "minute": _clean_int(minute, 0, 59, "分钟"),
+    }
+    return text, photos, when
+
+
+async def _write_images(
+    connection: Any, task_id: str, photos: Sequence[ChatImage], stamp: str
+) -> None:
+    for index, image in enumerate(photos):
+        await connection.execute(
+            """
+            INSERT INTO scheduled_task_images(
+                id, task_id, name, mime, data_url, size, position, created_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id(),
+                task_id,
+                image.name,
+                image.mime,
+                image.data_url,
+                image.size,
+                index,
+                stamp,
+            ),
+        )
+
+
 class ScheduledTaskService:
     def __init__(self, db: Database):
         self.db = db
@@ -175,31 +229,18 @@ class ScheduledTaskService:
         minute: int = 0,
         images: Sequence[ChatImage] | None = None,
     ) -> dict[str, Any]:
-        text = (prompt or "").strip()
-        photos = list(images or [])
-        if not text and not photos:
-            raise ValueError("内容不能为空")
-        if kind not in KINDS:
-            raise ValueError("不支持的时间类型")
-        hour = _clean_int(hour, 0, 23, "小时")
-        minute = _clean_int(minute, 0, 59, "分钟")
-        month = _clean_int(month, 1, 12, "月份") if kind == "once" else None
-        day = (
-            _clean_int(day, 1, 31, "日期") if kind in ("once", "monthly") else None
+        text, photos, when = _clean_request(
+            prompt,
+            kind=kind,
+            month=month,
+            day=day,
+            weekday=weekday,
+            hour=hour,
+            minute=minute,
+            images=images,
         )
-        weekday = _clean_int(weekday, 0, 6, "星期") if kind == "weekly" else None
         now = utcnow()
-        scheduled_at = iso(
-            next_occurrence(
-                kind,
-                month=month,
-                day=day,
-                weekday=weekday,
-                hour=hour,
-                minute=minute,
-                after=now,
-            )
-        )
+        scheduled_at = iso(next_occurrence(**when, after=now))
         task_id = new_id()
         stamp = iso(now)
         async with self.db.transaction() as connection:
@@ -217,36 +258,77 @@ class ScheduledTaskService:
                     session_id,
                     task_title(text),
                     text,
-                    kind,
-                    month,
-                    day,
-                    weekday,
-                    hour,
-                    minute,
+                    when["kind"],
+                    when["month"],
+                    when["day"],
+                    when["weekday"],
+                    when["hour"],
+                    when["minute"],
                     scheduled_at,
                     stamp,
                     stamp,
                 ),
             )
-            for index, image in enumerate(photos):
-                await connection.execute(
-                    """
-                    INSERT INTO scheduled_task_images(
-                        id, task_id, name, mime, data_url, size, position, created_at
-                    )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        new_id(),
-                        task_id,
-                        image.name,
-                        image.mime,
-                        image.data_url,
-                        image.size,
-                        index,
-                        stamp,
-                    ),
-                )
+            await _write_images(connection, task_id, photos, stamp)
+        return await self.get(task_id)
+
+    async def update(
+        self,
+        task_id: str,
+        prompt: str,
+        *,
+        kind: str,
+        month: int | None = None,
+        day: int | None = None,
+        weekday: int | None = None,
+        hour: int = 9,
+        minute: int = 0,
+        images: Sequence[ChatImage] | None = None,
+    ) -> dict[str, Any]:
+        """整体改写一条任务：正文、图片、时间全部按新值来，标题不动（改名另有入口）。
+
+        next_run_at 以「现在」为基准重算，所以编辑过的任务总是往未来排。
+        """
+
+        await self.get(task_id)
+        text, photos, when = _clean_request(
+            prompt,
+            kind=kind,
+            month=month,
+            day=day,
+            weekday=weekday,
+            hour=hour,
+            minute=minute,
+            images=images,
+        )
+        now = utcnow()
+        scheduled_at = iso(next_occurrence(**when, after=now))
+        stamp = iso(now)
+        async with self.db.transaction() as connection:
+            await connection.execute(
+                """
+                UPDATE scheduled_tasks
+                SET prompt = ?, kind = ?, month = ?, day = ?, weekday = ?,
+                    hour = ?, minute = ?, next_run_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    text,
+                    when["kind"],
+                    when["month"],
+                    when["day"],
+                    when["weekday"],
+                    when["hour"],
+                    when["minute"],
+                    scheduled_at,
+                    stamp,
+                    task_id,
+                ),
+            )
+            await connection.execute(
+                "DELETE FROM scheduled_task_images WHERE task_id = ?", (task_id,)
+            )
+            await _write_images(connection, task_id, photos, stamp)
         return await self.get(task_id)
 
     async def rename(self, task_id: str, title: str) -> dict[str, Any]:
