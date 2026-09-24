@@ -882,6 +882,21 @@
     };
   }
 
+  const packingEntries = new Set<string>();
+
+  function isTouchOnly(): boolean {
+    return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  }
+
+  function archiveEntry(entry: FileEntry) {
+    // 浏览器要等服务器打包完才开始下载，所以先给个提示；打包期间忽略重复点击。
+    if (!activeProjectId || packingEntries.has(entry.path)) return;
+    packingEntries.add(entry.path);
+    notify(`正在服务器上打包 ${entry.name}…`);
+    window.location.href = client.archiveUrl(activeProjectId, entry.path);
+    window.setTimeout(() => packingEntries.delete(entry.path), 20000);
+  }
+
   function openEntryMenu(entry: FileEntry, event: MouseEvent) {
     const items: MenuItem[] = [];
     if (entry.type === 'file') {
@@ -891,6 +906,13 @@
         onSelect: () => {
           if (activeProjectId) window.location.href = client.downloadUrl(activeProjectId, entry.path);
         }
+      });
+    } else if (!isTouchOnly()) {
+      // 手机端下载 zip 体验很差，只给电脑端用。
+      items.push({
+        label: '压缩并下载',
+        icon: 'archive',
+        onSelect: () => archiveEntry(entry)
       });
     }
     items.push({

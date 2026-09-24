@@ -141,6 +141,7 @@ async def _maintenance_loop(app_state: AppState) -> None:
     while True:
         try:
             await app_state.uploads.cleanup_expired()
+            await app_state.files.cleanup_stale_archives()
             await app_state.auth.cleanup_expired()
         except Exception:
             logger.exception("maintenance task failed")

@@ -178,6 +178,9 @@ export const client = {
   downloadUrl(projectId: string, path: string) {
     return `/api/projects/${projectId}/files/download?path=${encodeURIComponent(path)}`;
   },
+  archiveUrl(projectId: string, path: string) {
+    return `/api/projects/${projectId}/files/archive?path=${encodeURIComponent(path)}`;
+  },
   serverInfo() {
     return api<ServerInfo>('/api/server-info');
   }

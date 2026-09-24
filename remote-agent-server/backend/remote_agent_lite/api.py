@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 
 from .codex import CodexError
@@ -649,6 +650,30 @@ async def raw_image(
             "Content-Security-Policy": "default-src 'none'",
             "Cache-Control": "private, max-age=60",
         },
+    )
+
+
+@router.get("/projects/{project_id}/files/archive")
+async def archive_folder(
+    project_id: str,
+    request: Request,
+    path: str = Query(min_length=1),
+    _: Any = Depends(current_auth),
+):
+    """把文件夹打包成 zip 直接下载；临时文件在响应结束时删掉，服务器上不留副本。"""
+
+    app_state: AppState = state(request)
+    try:
+        archive, filename = await app_state.files.archive_entry(project_id, path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="文件夹不存在") from exc
+    except (StorageError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(
+        archive,
+        media_type="application/zip",
+        filename=filename,
+        background=BackgroundTask(archive.unlink, missing_ok=True),
     )
 
 
