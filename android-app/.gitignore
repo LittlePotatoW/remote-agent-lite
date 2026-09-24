@@ -1,0 +1,54 @@
+# android-app 专属忽略规则：只影响本目录及其子目录。
+# 仓库级规则（密钥、AGENTS.md、系统文件、构建产物黑名单）见根目录的 .gitignore。
+
+# --- Gradle / 构建产物 ---
+.gradle/
+build/
+/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+.kotlin/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.hprof
+
+# --- 本地配置（含各人机器上的 SDK 路径，绝不入库）---
+local.properties
+gradle-local.properties
+
+# --- 签名与凭据（真实密钥绝不入库）---
+*.jks
+*.keystore
+*.p12
+keystore.properties
+signing.properties
+
+# --- IDE 工程文件 ---
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# --- Gradle wrapper：二进制 + 生成脚本，不入库 ---
+# 用 Android Studio 打开本目录即可构建；命令行构建请先跑一次
+#   gradle wrapper --gradle-version 9.3.1
+gradle/wrapper/
+gradlew
+gradlew.bat
+
+# --- 其它二进制 / 压缩包（仓库只存文本）---
+*.jar
+*.aar
+*.so
+*.zip
+
+# --- 其它 ---
+*.log
+.DS_Store
+Thumbs.db
+tools/
