@@ -92,6 +92,7 @@
   let taskImages: PendingImage[] = [];
   let taskImageError = '';
   let taskImageInput: HTMLInputElement;
+  let taskTextarea: HTMLTextAreaElement;
 
   let filePath = '';
   let entries: FileEntry[] = [];
@@ -527,6 +528,13 @@
     revokeImages(taskImages.filter((image) => image.id === id));
     taskImages = taskImages.filter((image) => image.id !== id);
     if (!taskImages.length) taskImageError = '';
+  }
+
+  /** 内容框和输入框一样，从一行开始随字数长高（最高 140px，再高就滚）。 */
+  function growTaskPrompt() {
+    if (!taskTextarea) return;
+    taskTextarea.style.height = 'auto';
+    taskTextarea.style.height = `${Math.min(taskTextarea.scrollHeight, 140)}px`;
   }
 
   /** 「定时」那组滚轮的默认值：一小时后（取整到 5 分钟）。 */
@@ -1221,7 +1229,13 @@
               >
                 <Icon name="image" size={20} />
               </button>
-              <textarea class="field-area" rows="3" bind:value={taskPrompt}></textarea>
+              <textarea
+                class="field-area"
+                rows="1"
+                bind:this={taskTextarea}
+                bind:value={taskPrompt}
+                on:input={growTaskPrompt}
+              ></textarea>
             </div>
           </div>
           <input
